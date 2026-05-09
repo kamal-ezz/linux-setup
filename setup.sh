@@ -40,7 +40,8 @@ list_sections() {
     echo "  extra-tools  yt-dlp, Neovim, opencode"
     echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
-    echo "  nvidia       NVIDIA drivers"
+    echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
+    echo "  asus         asusctl/supergfxctl (auto-skips if not ASUS hardware)"
     echo "  fonts        MesloLGS NF fonts"
     echo "  shell        Oh My Zsh + Powerlevel10k + plugins"
     echo "  node         fnm + Node.js LTS + npm globals"
@@ -556,6 +557,12 @@ setup_flatpak() {
 install_nvidia() {
     log_section "Section 10: NVIDIA Drivers"
 
+    if ! has_nvidia_hardware; then
+        log_warn "No NVIDIA GPU detected, skipping NVIDIA drivers"
+        summary_skip "NVIDIA drivers (no NVIDIA GPU detected)"
+        return
+    fi
+
     if pkg_installed akmod-nvidia; then
         log_warn "akmod-nvidia already installed, skipping"
         summary_skip "NVIDIA drivers (already installed)"
@@ -587,10 +594,63 @@ install_nvidia() {
     summary_ok "NVIDIA drivers (reboot required)"
 }
 
-# ─── Section 11: Fonts ───────────────────────────────────────────────────────
+# ─── Section 11: ASUS Linux Tools ────────────────────────────────────────────
+
+install_asus_tools() {
+    log_section "Section 11: ASUS Linux Tools"
+
+    if ! has_asus_hardware; then
+        log_warn "No ASUS hardware detected, skipping asusctl"
+        summary_skip "ASUS tools (not ASUS hardware)"
+        return
+    fi
+
+    if pkg_installed asusctl && pkg_installed supergfxctl; then
+        log_warn "ASUS tools already installed"
+    else
+        log_info "ASUS hardware detected. Enabling ASUS Linux COPR..."
+        if ! sudo dnf copr list --enabled 2>/dev/null | grep -q "lukenukem/asus-linux"; then
+            if ! sudo dnf copr enable -y lukenukem/asus-linux; then
+                log_warn "Could not enable lukenukem/asus-linux COPR — skipping ASUS tools"
+                summary_fail "ASUS tools"
+                return 0
+            fi
+        else
+            log_warn "ASUS Linux COPR already enabled"
+        fi
+
+        log_info "Installing asusctl and supergfxctl..."
+        if ! sudo dnf install -y asusctl supergfxctl; then
+            log_warn "Could not install ASUS tools — skipping"
+            summary_fail "ASUS tools"
+            return 0
+        fi
+    fi
+
+    # Best-effort, non-blocking configuration. Each command is timeout-limited
+    # and failure is logged but never aborts the setup.
+    timeout 15s sudo systemctl enable --now asusd 2>/dev/null || \
+        log_warn "Could not enable asusd service"
+    timeout 15s sudo systemctl enable --now supergfxd 2>/dev/null || \
+        log_warn "Could not enable supergfxd service"
+
+    if cmd_exists asusctl; then
+        timeout 10s asusctl profile -P Quiet 2>/dev/null || \
+            log_warn "Could not set ASUS profile to Quiet/power-saver"
+        timeout 10s asusctl -c 80 2>/dev/null || \
+            log_warn "Could not set ASUS battery charge limit to 80%"
+    else
+        log_warn "asusctl command not found after install; skipping ASUS profile config"
+    fi
+
+    log_info "Leaving ASUS GPU mode unchanged; change it manually with supergfxctl if needed"
+    summary_ok "ASUS tools"
+}
+
+# ─── Section 12: Fonts ───────────────────────────────────────────────────────
 
 install_fonts() {
-    log_section "Section 11: Fonts (MesloLGS NF)"
+    log_section "Section 12: Fonts (MesloLGS NF)"
 
     local FONT_DIR="$HOME/.local/share/fonts"
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
@@ -1431,6 +1491,7 @@ main() {
     run_section ghostty       install_ghostty
     run_section flatpak       setup_flatpak
     run_section nvidia        install_nvidia
+    run_section asus          install_asus_tools
     run_section fonts         install_fonts
     run_section shell         install_shell_extras
     run_section node          install_node

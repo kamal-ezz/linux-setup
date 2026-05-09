@@ -12,6 +12,20 @@ user_in_group() {
     id -nG "$USER" | tr ' ' '\n' | grep -qx "$1"
 }
 
+has_nvidia_hardware() {
+    # NVIDIA PCI vendor ID is 0x10de. Checking /sys avoids depending on lspci.
+    grep -qi '^0x10de$' /sys/bus/pci/devices/*/vendor 2>/dev/null
+}
+
+has_asus_hardware() {
+    local vendor product board
+    vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
+    product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+    board="$(cat /sys/class/dmi/id/board_vendor 2>/dev/null || true)"
+
+    printf '%s\n%s\n%s\n' "$vendor" "$product" "$board" | grep -Eiq 'ASUSTeK|ASUS'
+}
+
 add_dnf_repo_from_url() {
     local url="$1"
 
