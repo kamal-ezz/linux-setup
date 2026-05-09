@@ -46,6 +46,7 @@ list_sections() {
     echo "  node         fnm + Node.js LTS + npm globals"
     echo "  ssh          SSH key setup"
     echo "  services     Docker + Bluetooth + Firewall"
+    echo "  security     Crypto policy, DNS over TLS, SELinux (skip on corporate networks)"
     echo "  virt         Virtualization (KVM/QEMU)"
     echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
@@ -57,6 +58,7 @@ list_sections() {
     echo "Examples:"
     echo "  bash setup.sh --only gnome dotfiles"
     echo "  bash setup.sh --skip nvidia snapper virt"
+    echo "  bash setup.sh --skip security           # corporate/restricted network"
 }
 
 parse_args() {
@@ -122,7 +124,11 @@ install_gnome_ext() {
     fi
 
     local GNOME_VER
-    GNOME_VER=$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    GNOME_VER=$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)
+    if [[ -z "$GNOME_VER" ]]; then
+        log_warn "Could not determine GNOME Shell version; skipping $name"
+        return
+    fi
 
     local EXT_INFO
     EXT_INFO=$(curl -fsSL \
@@ -131,7 +137,7 @@ install_gnome_ext() {
     local DOWNLOAD_URL
     DOWNLOAD_URL=$(python3 -c \
         "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('download_url',''))" \
-        <<< "$EXT_INFO" 2>/dev/null)
+        <<< "$EXT_INFO" 2>/dev/null || true)
 
     if [[ -z "$DOWNLOAD_URL" ]]; then
         log_warn "Could not resolve download URL for $name (GNOME $GNOME_VER)"
@@ -234,8 +240,7 @@ EOF
     # Docker CE
     if [[ ! -f /etc/yum.repos.d/docker-ce.repo ]]; then
         log_info "Adding Docker CE repository..."
-        sudo dnf config-manager addrepo \
-            --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo
+        add_dnf_repo_from_url https://download.docker.com/linux/fedora/docker-ce.repo
     else
         log_warn "Docker CE repo already configured"
     fi
@@ -267,8 +272,7 @@ EOF
     # ProtonVPN
     if [[ ! -f /etc/yum.repos.d/protonvpn-stable.repo ]]; then
         log_info "Adding ProtonVPN repository..."
-        sudo dnf config-manager addrepo \
-            --from-repofile="https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable.repo"
+        add_dnf_repo_from_url "https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable.repo"
     else
         log_warn "ProtonVPN repo already configured"
     fi
@@ -442,7 +446,7 @@ install_extra_tools() {
         OC_RPM_URL=$(curl -fsSL https://api.github.com/repos/sst/opencode/releases/latest \
             | grep -o '"browser_download_url": *"[^"]*\.rpm"' \
             | grep -o 'https://[^"]*' \
-            | head -1)
+            | head -1 || true)
         if [[ -z "$OC_RPM_URL" ]]; then
             log_warn "Could not determine opencode RPM download URL, skipping"
             summary_fail "opencode"
@@ -487,7 +491,12 @@ install_ghostty() {
     # Latest stable Ghostty tag
     local GHOSTTY_TAG
     GHOSTTY_TAG=$(curl -fsSL https://api.github.com/repos/ghostty-org/ghostty/releases/latest \
-        | grep '"tag_name"' | grep -o '"[^"]*"' | tail -1 | tr -d '"')
+        | grep '"tag_name"' | grep -o '"[^"]*"' | tail -1 | tr -d '"' || true)
+    if [[ -z "$GHOSTTY_TAG" ]]; then
+        log_error "Could not determine latest Ghostty release tag."
+        summary_fail "Ghostty"
+        return 1
+    fi
     log_info "Cloning Ghostty $GHOSTTY_TAG..."
 
     local GHOSTTY_SRC="/tmp/ghostty-src"
@@ -678,7 +687,7 @@ install_node() {
     "$FNM_BIN" default lts-latest
 
     local NPM_BIN
-    NPM_BIN="$("$FNM_BIN" exec --using=lts-latest which npm 2>/dev/null)"
+    NPM_BIN="$("$FNM_BIN" exec --using=lts-latest which npm 2>/dev/null || true)"
 
     if [[ -z "$NPM_BIN" ]]; then
         log_error "npm not found via fnm; skipping global npm packages."
@@ -750,7 +759,7 @@ setup_services() {
     log_info "Enabling Docker service..."
     sudo systemctl enable --now docker containerd
 
-    if groups "$USER" | grep -q docker; then
+    if user_in_group docker; then
         log_warn "User $USER already in docker group"
     else
         sudo usermod -aG docker "$USER"
@@ -770,9 +779,8 @@ setup_services() {
     sudo systemctl enable --now firewalld
     sudo firewall-cmd --set-default-zone=public --permanent
 
-    for service in ssh http https; do
-        sudo firewall-cmd --permanent --add-service="$service" 2>/dev/null || true
-    done
+    sudo firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
+    log_warn "Inbound HTTP/HTTPS are not opened by default; add them manually if this machine hosts web services."
 
     # SSH brute-force rate limiting (max 6 connections per minute)
     if ! sudo firewall-cmd --permanent --list-rich-rules 2>/dev/null | grep -q "ssh.*limit"; then
@@ -812,15 +820,30 @@ setup_services() {
         log_info "zram compression set to zstd (takes effect after reboot)"
     fi
 
+    summary_ok "Services"
+}
+
+# ─── Section 16: Security Hardening ──────────────────────────────────────────
+#
+# Safe to skip with: bash setup.sh --skip security
+# Revert crypto policy:  sudo update-crypto-policies --set DEFAULT
+# Revert DNS over TLS:   sudo rm /etc/systemd/resolved.conf.d/99-dns-over-tls.conf && sudo systemctl restart systemd-resolved
+
+setup_security() {
+    log_section "Section 16: Security Hardening"
+
     # Crypto policy: remove SHA-1 from system-wide TLS/SSH
+    # Revert with: sudo update-crypto-policies --set DEFAULT
     if update-crypto-policies --show 2>/dev/null | grep -q "NO-SHA1"; then
         log_warn "Crypto policy already DEFAULT:NO-SHA1"
     else
         sudo update-crypto-policies --set DEFAULT:NO-SHA1
-        log_info "Crypto policy set to DEFAULT:NO-SHA1"
+        log_info "Crypto policy set to DEFAULT:NO-SHA1 (removes SHA-1 from TLS/SSH)"
+        log_warn "  Revert: sudo update-crypto-policies --set DEFAULT"
     fi
 
     # DNS over TLS via systemd-resolved (Cloudflare + Quad9)
+    # Revert with: sudo rm /etc/systemd/resolved.conf.d/99-dns-over-tls.conf
     local DNS_CONF="/etc/systemd/resolved.conf.d/99-dns-over-tls.conf"
     if [[ -f "$DNS_CONF" ]]; then
         log_warn "DNS over TLS already configured"
@@ -834,6 +857,7 @@ DNSSEC=yes
 EOF
         sudo systemctl restart systemd-resolved
         log_info "DNS over TLS configured (Cloudflare + Quad9)"
+        log_warn "  Revert: sudo rm $DNS_CONF && sudo systemctl restart systemd-resolved"
     fi
 
     # SELinux: verify enforcing
@@ -846,13 +870,13 @@ EOF
         log_info "SELinux set to enforcing"
     fi
 
-    summary_ok "Services + system hardening"
+    summary_ok "Security hardening"
 }
 
-# ─── Section 16: Virtualization ──────────────────────────────────────────────
+# ─── Section 17: Virtualization ──────────────────────────────────────────────
 
 setup_virtualization() {
-    log_section "Section 16: Virtualization"
+    log_section "Section 17: Virtualization"
 
     if sudo dnf group list --installed 2>/dev/null | grep -q "Virtualization"; then
         log_warn "Virtualization group already installed"
@@ -865,7 +889,7 @@ setup_virtualization() {
     sudo systemctl enable --now libvirtd
 
     for group in libvirt kvm; do
-        if groups "$USER" | grep -q "$group"; then
+        if user_in_group "$group"; then
             log_warn "User already in $group group"
         else
             sudo usermod -aG "$group" "$USER"
@@ -876,10 +900,10 @@ setup_virtualization() {
     summary_ok "Virtualization"
 }
 
-# ─── Section 17: Snapper (Btrfs snapshots) ───────────────────────────────────
+# ─── Section 18: Snapper (Btrfs snapshots) ───────────────────────────────────
 
 setup_snapper() {
-    log_section "Section 17: Snapper (Btrfs Snapshots)"
+    log_section "Section 18: Snapper (Btrfs Snapshots)"
 
     if ! findmnt -n -o FSTYPE / 2>/dev/null | grep -q btrfs; then
         log_warn "Root filesystem is not Btrfs — skipping Snapper setup."
@@ -926,10 +950,10 @@ setup_snapper() {
     summary_ok "Snapper (Btrfs snapshots)"
 }
 
-# ─── Section 18: VS Code ─────────────────────────────────────────────────────
+# ─── Section 19: VS Code ─────────────────────────────────────────────────────
 
 setup_vscode() {
-    log_section "Section 18: VS Code Extensions + Theme"
+    log_section "Section 19: VS Code Extensions + Theme"
 
     if ! cmd_exists code; then
         log_warn "VS Code not installed, skipping"
@@ -1019,10 +1043,10 @@ EOF
     fi
 }
 
-# ─── Section 19: GNOME Configuration ─────────────────────────────────────────
+# ─── Section 20: GNOME Configuration ─────────────────────────────────────────
 
 configure_gnome() {
-    log_section "Section 19: GNOME Configuration"
+    log_section "Section 20: GNOME Configuration"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session detected (running via SSH?). Skipping GNOME settings."
@@ -1125,10 +1149,14 @@ EOF
         log_warn "AppIndicator will activate after logout/login"
 
     # Dash-to-dock: black opaque background
-    gsettings set org.gnome.shell.extensions.dash-to-dock transparency-mode 'FIXED'
-    gsettings set org.gnome.shell.extensions.dash-to-dock custom-background-color true
-    gsettings set org.gnome.shell.extensions.dash-to-dock background-color '#000000'
-    gsettings set org.gnome.shell.extensions.dash-to-dock background-opacity 1.0
+    if gsettings list-schemas | grep -qx 'org.gnome.shell.extensions.dash-to-dock'; then
+        gsettings set org.gnome.shell.extensions.dash-to-dock transparency-mode 'FIXED'
+        gsettings set org.gnome.shell.extensions.dash-to-dock custom-background-color true
+        gsettings set org.gnome.shell.extensions.dash-to-dock background-color '#000000'
+        gsettings set org.gnome.shell.extensions.dash-to-dock background-opacity 1.0
+    else
+        log_warn "Dash-to-dock schema not available; skipping dock appearance settings"
+    fi
 
     log_warn "GNOME extensions require logout/login to activate."
 
@@ -1151,10 +1179,10 @@ EOF
     summary_ok "GNOME configuration"
 }
 
-# ─── Section 20: Ricing ───────────────────────────────────────────────────────
+# ─── Section 21: Ricing ───────────────────────────────────────────────────────
 
 setup_rice() {
-    log_section "Section 20: Ricing (Catppuccin theme + cursor + fonts + extensions)"
+    log_section "Section 21: Ricing (Catppuccin theme + cursor + fonts + extensions)"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session — skipping rice setup"
@@ -1171,14 +1199,18 @@ setup_rice() {
         local INTER_URL
         INTER_URL=$(curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
             | grep -o '"browser_download_url": *"[^"]*Inter[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1)
-        curl -fLo "$INTER_ZIP" "$INTER_URL"
-        mkdir -p "$HOME/.local/share/fonts/Inter"
-        unzip -q "$INTER_ZIP" "*.ttf" -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
-            unzip -q "$INTER_ZIP" -d "$HOME/.local/share/fonts/Inter"
-        fc-cache -f "$HOME/.local/share/fonts"
-        rm -f "$INTER_ZIP"
-        log_info "Inter font installed."
+            | grep -o 'https://[^"]*' | head -1 || true)
+        if [[ -z "$INTER_URL" ]]; then
+            log_warn "Could not resolve Inter font URL, skipping"
+        else
+            curl -fLo "$INTER_ZIP" "$INTER_URL"
+            mkdir -p "$HOME/.local/share/fonts/Inter"
+            unzip -q "$INTER_ZIP" "*.ttf" -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
+                unzip -q "$INTER_ZIP" -d "$HOME/.local/share/fonts/Inter"
+            fc-cache -f "$HOME/.local/share/fonts"
+            rm -f "$INTER_ZIP"
+            log_info "Inter font installed."
+        fi
     fi
 
     # Catppuccin GTK theme
@@ -1190,7 +1222,7 @@ setup_rice() {
         local THEME_URL
         THEME_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/gtk/releases/latest \
             | grep -oi '"browser_download_url": *"[^"]*[Mm]ocha[^"]*[Bb]lue[^"]*[Dd]ark[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1)
+            | grep -o 'https://[^"]*' | head -1 || true)
         if [[ -z "$THEME_URL" ]]; then
             log_warn "Could not resolve Catppuccin GTK theme URL, skipping"
         else
@@ -1211,7 +1243,7 @@ setup_rice() {
         local CURSOR_URL
         CURSOR_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/cursors/releases/latest \
             | grep -oi '"browser_download_url": *"[^"]*mocha[^"]*dark[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1)
+            | grep -o 'https://[^"]*' | head -1 || true)
         if [[ -z "$CURSOR_URL" ]]; then
             log_warn "Could not resolve Catppuccin cursor URL, skipping"
         else
@@ -1225,12 +1257,12 @@ setup_rice() {
 
     # Apply themes
     local GTK_THEME
-    GTK_THEME=$(ls "$HOME/.local/share/themes/" 2>/dev/null | grep -i "catppuccin.*mocha" | head -1)
+    GTK_THEME=$(ls "$HOME/.local/share/themes/" 2>/dev/null | grep -i "catppuccin.*mocha" | head -1 || true)
     [[ -n "$GTK_THEME" ]] && \
         gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
 
     local CURSOR_THEME
-    CURSOR_THEME=$(ls "$HOME/.local/share/icons/" 2>/dev/null | grep -i "catppuccin.*mocha.*cursor" | head -1)
+    CURSOR_THEME=$(ls "$HOME/.local/share/icons/" 2>/dev/null | grep -i "catppuccin.*mocha.*cursor" | head -1 || true)
     [[ -n "$CURSOR_THEME" ]] && \
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME"
 
@@ -1259,10 +1291,10 @@ setup_rice() {
     summary_ok "Ricing"
 }
 
-# ─── Section 21: Dotfiles ────────────────────────────────────────────────────
+# ─── Section 22: Dotfiles ────────────────────────────────────────────────────
 
 setup_dotfiles() {
-    log_section "Section 21: Dotfiles"
+    log_section "Section 22: Dotfiles"
 
     local FILES=(
         ".zshrc"
@@ -1294,10 +1326,10 @@ setup_dotfiles() {
     summary_ok "Dotfiles"
 }
 
-# ─── Section 22: Default Shell ───────────────────────────────────────────────
+# ─── Section 23: Default Shell ───────────────────────────────────────────────
 
 set_default_shell() {
-    log_section "Section 22: Default Shell"
+    log_section "Section 23: Default Shell"
 
     local ZSH_PATH
     ZSH_PATH="$(command -v zsh)"
@@ -1377,6 +1409,7 @@ main() {
     run_section node          install_node
     run_section ssh           setup_ssh
     run_section services      setup_services
+    run_section security      setup_security
     run_section virt          setup_virtualization
     run_section snapper       setup_snapper
     run_section vscode        setup_vscode
