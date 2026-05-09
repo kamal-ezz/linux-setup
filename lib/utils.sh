@@ -28,7 +28,7 @@ add_dnf_repo_from_url() {
     fi
 
     log_warn "Could not add repo from $url — skipping"
-    return 1
+    return 0
 }
 
 # Install multiple packages in one dnf call, skipping already-installed ones

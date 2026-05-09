@@ -46,7 +46,7 @@ list_sections() {
     echo "  node         fnm + Node.js LTS + npm globals"
     echo "  ssh          SSH key setup"
     echo "  services     Docker + Bluetooth + Firewall"
-    echo "  security     Crypto policy, DNS over TLS, SELinux (skip on corporate networks)"
+    echo "  security     Light security checks; strict hardening is opt-in via env vars"
     echo "  virt         Virtualization (KVM/QEMU)"
     echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
@@ -58,7 +58,7 @@ list_sections() {
     echo "Examples:"
     echo "  bash setup.sh --only gnome dotfiles"
     echo "  bash setup.sh --skip nvidia snapper virt"
-    echo "  bash setup.sh --skip security           # corporate/restricted network"
+    echo "  ENABLE_STRICT_CRYPTO=1 ENABLE_DNS_OVER_TLS=1 bash setup.sh --only security"
 }
 
 parse_args() {
@@ -500,9 +500,9 @@ install_ghostty() {
     GHOSTTY_TAG=$(curl -fsSL https://api.github.com/repos/ghostty-org/ghostty/releases/latest \
         | grep '"tag_name"' | grep -o '"[^"]*"' | tail -1 | tr -d '"' || true)
     if [[ -z "$GHOSTTY_TAG" ]]; then
-        log_error "Could not determine latest Ghostty release tag."
+        log_warn "Could not determine latest Ghostty release tag — skipping"
         summary_fail "Ghostty"
-        return 1
+        return 0
     fi
     log_info "Cloning Ghostty $GHOSTTY_TAG..."
 
@@ -684,9 +684,9 @@ install_node() {
     fi
 
     if [[ ! -x "$FNM_BIN" ]]; then
-        log_error "fnm binary not found at $FNM_BIN after install."
+        log_warn "fnm binary not found at $FNM_BIN after install — skipping Node.js setup"
         summary_fail "fnm + Node.js"
-        return 1
+        return 0
     fi
 
     log_info "Installing Node.js LTS via fnm..."
@@ -697,9 +697,9 @@ install_node() {
     NPM_BIN="$("$FNM_BIN" exec --using=lts-latest which npm 2>/dev/null || true)"
 
     if [[ -z "$NPM_BIN" ]]; then
-        log_error "npm not found via fnm; skipping global npm packages."
+        log_warn "npm not found via fnm — skipping global npm packages"
         summary_fail "npm global packages"
-        return 1
+        return 0
     fi
 
     local NPM_GLOBALS=(
@@ -830,54 +830,74 @@ setup_services() {
     summary_ok "Services"
 }
 
-# ─── Section 16: Security Hardening ──────────────────────────────────────────
+# ─── Section 16: Security Checks / Optional Hardening ───────────────────────
 #
-# Safe to skip with: bash setup.sh --skip security
+# Defaults are intentionally conservative to avoid breaking VPNs, corporate
+# networks, captive portals, legacy SSH hosts, or custom SELinux workflows.
+#
+# Optional strict mode examples:
+#   ENABLE_STRICT_CRYPTO=1 bash setup.sh --only security
+#   ENABLE_DNS_OVER_TLS=1 bash setup.sh --only security
+#   FORCE_SELINUX_ENFORCING=1 bash setup.sh --only security
+#
 # Revert crypto policy:  sudo update-crypto-policies --set DEFAULT
 # Revert DNS over TLS:   sudo rm /etc/systemd/resolved.conf.d/99-dns-over-tls.conf && sudo systemctl restart systemd-resolved
 
 setup_security() {
-    log_section "Section 16: Security Hardening"
+    log_section "Section 16: Security Checks / Optional Hardening"
 
-    # Crypto policy: remove SHA-1 from system-wide TLS/SSH
-    # Revert with: sudo update-crypto-policies --set DEFAULT
-    if update-crypto-policies --show 2>/dev/null | grep -q "NO-SHA1"; then
-        log_warn "Crypto policy already DEFAULT:NO-SHA1"
+    # Crypto policy: report by default; strict NO-SHA1 is opt-in.
+    local current_crypto_policy
+    current_crypto_policy="$(update-crypto-policies --show 2>/dev/null || true)"
+    if [[ "${ENABLE_STRICT_CRYPTO:-0}" == "1" ]]; then
+        if [[ "$current_crypto_policy" == *"NO-SHA1"* ]]; then
+            log_warn "Crypto policy already includes NO-SHA1"
+        else
+            sudo update-crypto-policies --set DEFAULT:NO-SHA1
+            log_info "Crypto policy set to DEFAULT:NO-SHA1"
+            log_warn "  Revert: sudo update-crypto-policies --set DEFAULT"
+        fi
     else
-        sudo update-crypto-policies --set DEFAULT:NO-SHA1
-        log_info "Crypto policy set to DEFAULT:NO-SHA1 (removes SHA-1 from TLS/SSH)"
-        log_warn "  Revert: sudo update-crypto-policies --set DEFAULT"
+        log_info "Crypto policy: ${current_crypto_policy:-unknown}"
+        log_warn "Strict crypto skipped. Set ENABLE_STRICT_CRYPTO=1 to disable SHA-1 system-wide."
     fi
 
-    # DNS over TLS via systemd-resolved (Cloudflare + Quad9)
-    # Revert with: sudo rm /etc/systemd/resolved.conf.d/99-dns-over-tls.conf
+    # DNS over TLS via systemd-resolved is opt-in to avoid network breakage.
     local DNS_CONF="/etc/systemd/resolved.conf.d/99-dns-over-tls.conf"
-    if [[ -f "$DNS_CONF" ]]; then
-        log_warn "DNS over TLS already configured"
-    else
-        sudo mkdir -p /etc/systemd/resolved.conf.d
-        sudo tee "$DNS_CONF" > /dev/null <<'EOF'
+    if [[ "${ENABLE_DNS_OVER_TLS:-0}" == "1" ]]; then
+        if [[ -f "$DNS_CONF" ]]; then
+            log_warn "DNS over TLS already configured"
+        else
+            sudo mkdir -p /etc/systemd/resolved.conf.d
+            sudo tee "$DNS_CONF" > /dev/null <<'EOF'
 [Resolve]
 DNS=1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net
 DNSOverTLS=yes
 DNSSEC=yes
 EOF
-        sudo systemctl restart systemd-resolved
-        log_info "DNS over TLS configured (Cloudflare + Quad9)"
-        log_warn "  Revert: sudo rm $DNS_CONF && sudo systemctl restart systemd-resolved"
+            sudo systemctl restart systemd-resolved
+            log_info "DNS over TLS configured (Cloudflare + Quad9)"
+            log_warn "  Revert: sudo rm $DNS_CONF && sudo systemctl restart systemd-resolved"
+        fi
+    else
+        log_warn "DNS over TLS skipped. Set ENABLE_DNS_OVER_TLS=1 to enable it."
     fi
 
-    # SELinux: verify enforcing
-    if getenforce 2>/dev/null | grep -qi "enforcing"; then
-        log_warn "SELinux already enforcing"
-    else
-        log_warn "SELinux not enforcing — fixing..."
-        sudo setenforce 1
+    # SELinux: report by default; force enforcing only if explicitly requested.
+    local selinux_state
+    selinux_state="$(getenforce 2>/dev/null || echo unknown)"
+    if echo "$selinux_state" | grep -qi "enforcing"; then
+        log_info "SELinux: enforcing"
+    elif [[ "${FORCE_SELINUX_ENFORCING:-0}" == "1" ]]; then
+        log_warn "SELinux is $selinux_state — setting enforcing because FORCE_SELINUX_ENFORCING=1"
+        sudo setenforce 1 2>/dev/null || true
         sudo sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
         log_info "SELinux set to enforcing"
+    else
+        log_warn "SELinux is $selinux_state. Set FORCE_SELINUX_ENFORCING=1 to enforce it."
     fi
 
-    summary_ok "Security hardening"
+    summary_ok "Security checks / optional hardening"
 }
 
 # ─── Section 17: Virtualization ──────────────────────────────────────────────
