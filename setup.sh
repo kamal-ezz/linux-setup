@@ -167,7 +167,7 @@ install_packages() {
         gstreamer1-plugins-ugly gstreamer1-libav \
         mozilla-openh264 \
         `# Gaming` \
-        gamemode mangohud lutris goverlay \
+        gamemode mangohud lutris goverlay wine \
         `# Apps` \
         google-chrome-stable ghostty libreoffice steam code \
         `# GNOME` \
@@ -269,6 +269,15 @@ setup_flatpak() {
             https://flathub.org/repo/flathub.flatpakrepo
         log_info "Flathub added."
         summary_ok "Flathub"
+    fi
+
+    # Spotify (only available via Flatpak)
+    if flatpak list 2>/dev/null | grep -q "com.spotify.Client"; then
+        log_warn "Spotify already installed"
+    else
+        log_info "Installing Spotify..."
+        flatpak install -y flathub com.spotify.Client
+        log_info "Spotify installed."
     fi
 }
 
