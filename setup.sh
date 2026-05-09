@@ -458,10 +458,16 @@ configure_gnome() {
         return
     fi
 
-    gsettings set org.gnome.desktop.interface color-scheme   'prefer-dark'
-    gsettings set org.gnome.desktop.interface icon-theme     'Papirus-Dark'
-    gsettings set org.gnome.desktop.input-sources sources    "[('xkb', 'us'), ('xkb', 'ara')]"
-    gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
+    gsettings set org.gnome.desktop.interface color-scheme      'prefer-dark'
+    gsettings set org.gnome.desktop.interface icon-theme        'Papirus-Dark'
+    gsettings set org.gnome.desktop.input-sources sources       "[('xkb', 'us'), ('xkb', 'ara')]"
+    gsettings set org.gnome.desktop.peripherals.touchpad click-method             'areas'
+    gsettings set org.gnome.desktop.peripherals.touchpad tap-to-click             true
+    gsettings set org.gnome.desktop.peripherals.touchpad natural-scroll           true
+    gsettings set org.gnome.desktop.wm.preferences button-layout                 'appmenu:minimize,maximize,close'
+    gsettings set org.gnome.shell favorite-apps                 "['org.gnome.Nautilus.desktop', 'google-chrome.desktop', 'com.mitchellh.ghostty.desktop']"
+
+    sudo timedatectl set-timezone Africa/Casablanca
 
     xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || \
         log_warn "Could not set default browser"
