@@ -112,7 +112,7 @@ install_packages() {
     log_section "Section 5: Package Installation"
 
     local SYSTEM_TOOLS=(
-        zsh git curl wget unzip tar bat fzf htop
+        zsh git gh curl wget unzip tar bat fzf htop
     )
 
     local DEV_TOOLS=(
