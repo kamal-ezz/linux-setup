@@ -796,8 +796,27 @@ setup_vscode() {
     fi
 
     local EXTENSIONS=(
+        # Theme
         "Catppuccin.catppuccin-vsc"
         "Catppuccin.catppuccin-vsc-icons"
+        # Language support
+        "vscjava.vscode-java-pack"
+        "ms-python.python"
+        "ms-python.vscode-pylance"
+        "golang.go"
+        "llvm-vs-code-extensions.vscode-clangd"
+        "ms-azuretools.vscode-docker"
+        # Linting / formatting
+        "esbenp.prettier-vscode"
+        "dbaeumer.vscode-eslint"
+        "charliermarsh.ruff"
+        "timonwong.shellcheck"
+        # Quality of life
+        "usernamehw.errorlens"
+        "eamodio.gitlens"
+        "mhutchie.git-graph"
+        "oderwat.indent-rainbow"
+        "christian-kohler.path-intellisense"
     )
 
     for ext in "${EXTENSIONS[@]}"; do
@@ -815,15 +834,46 @@ setup_vscode() {
 {
   "workbench.colorTheme": "Catppuccin Mocha",
   "workbench.iconTheme": "catppuccin-mocha",
+
   "editor.fontFamily": "'MesloLGS NF', 'Droid Sans Mono', monospace",
   "editor.fontSize": 14,
   "editor.fontLigatures": true,
+  "editor.rulers": [100],
+  "editor.minimap.enabled": false,
+  "editor.bracketPairColorization.enabled": true,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+
+  "files.autoSave": "onFocusChange",
+
   "window.titleBarStyle": "custom",
-  "workbench.startupEditor": "none"
+  "workbench.startupEditor": "none",
+
+  "terminal.integrated.fontFamily": "'MesloLGS NF'",
+
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+  "[java]": {
+    "editor.defaultFormatter": "redhat.java"
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true
+  },
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+  "[shellscript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }
 EOF
-        log_info "VS Code settings.json written with Catppuccin Mocha theme."
-        summary_ok "VS Code Catppuccin Mocha"
+        log_info "VS Code settings.json written."
+        summary_ok "VS Code extensions + config"
     fi
 }
 
