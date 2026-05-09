@@ -269,11 +269,17 @@ EOF
         log_warn "PyCharm COPR already enabled"
     fi
 
-    # ProtonVPN
-    if [[ ! -f /etc/yum.repos.d/protonvpn-stable.repo ]]; then
+    # ProtonVPN — install via official release RPM (sets up the repo + GPG key)
+    if ! rpm -q protonvpn-stable-release &>/dev/null; then
         log_info "Adding ProtonVPN repository..."
-        add_dnf_repo_from_url "https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable.repo" || \
-            log_warn "ProtonVPN repo not available for Fedora $(rpm -E %fedora) yet — skipping"
+        local PVN_RPM="/tmp/protonvpn-stable-release.rpm"
+        local PVN_URL="https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable-release/protonvpn-stable-release-1.0.3-1.noarch.rpm"
+        if curl -fLo "$PVN_RPM" "$PVN_URL" 2>/dev/null; then
+            sudo dnf install -y "$PVN_RPM" && sudo dnf check-update --refresh 2>/dev/null || true
+            rm -f "$PVN_RPM"
+        else
+            log_warn "ProtonVPN repo RPM not available for Fedora $(rpm -E %fedora) — skipping"
+        fi
     else
         log_warn "ProtonVPN repo already configured"
     fi
@@ -322,7 +328,7 @@ install_packages() {
         gamemode mangohud lutris goverlay wine \
         `# Apps` \
         google-chrome-stable libreoffice steam code \
-        protonvpn-cli \
+        proton-vpn-gnome-desktop \
         `# GNOME` \
         papirus-icon-theme gnome-tweaks \
         gnome-shell-extension-dash-to-dock \
