@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Fedora post-install setup script
 # Run as your regular user (not root), from a desktop session.
+#
+# Usage:
+#   bash setup.sh                        # run all sections
+#   bash setup.sh --only gnome dotfiles  # run only these sections
+#   bash setup.sh --skip nvidia snapper  # run all except these
+#   bash setup.sh --list                 # list available sections
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +16,8 @@ BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
 START_TIME=$(date +%s)
 
 declare -a SUMMARY=()
+declare -a ONLY_SECTIONS=()
+declare -a SKIP_SECTIONS=()
 
 source "$SCRIPT_DIR/lib/colors.sh"
 source "$SCRIPT_DIR/lib/utils.sh"
@@ -19,10 +27,90 @@ summary_ok()   { SUMMARY+=("  ${GREEN}✓${NC}  $*"); }
 summary_skip() { SUMMARY+=("  ${YELLOW}→${NC}  $*"); }
 summary_fail() { SUMMARY+=("  ${RED}✗${NC}  $*"); }
 
-# ─── Section 2: Git Config ────────────────────────────────────────────────────
+# ─── Argument parsing ─────────────────────────────────────────────────────────
+
+list_sections() {
+    echo "Available sections:"
+    echo "  git          Git configuration"
+    echo "  dnf          DNF tuning (parallel downloads, fastest mirror)"
+    echo "  repos        Enable repositories (RPM Fusion, Chrome, Docker, VS Code, PyCharm)"
+    echo "  upgrade      System upgrade"
+    echo "  packages     Package installation"
+    echo "  ms-fonts     Microsoft fonts"
+    echo "  extra-tools  yt-dlp, Neovim"
+    echo "  flatpak      Flatpak + Flathub + Spotify"
+    echo "  nvidia       NVIDIA drivers"
+    echo "  fonts        MesloLGS NF fonts"
+    echo "  shell        Oh My Zsh + Powerlevel10k + plugins"
+    echo "  node         fnm + Node.js LTS + npm globals"
+    echo "  ssh          SSH key setup"
+    echo "  services     Docker + Bluetooth + Firewall"
+    echo "  virt         Virtualization (KVM/QEMU)"
+    echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
+    echo "  gnome        GNOME configuration"
+    echo "  dotfiles     Dotfiles symlinks"
+    echo "  shell-default  Set zsh as default shell"
+    echo ""
+    echo "Examples:"
+    echo "  bash setup.sh --only gnome dotfiles"
+    echo "  bash setup.sh --skip nvidia snapper virt"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --only)
+                shift
+                while [[ $# -gt 0 && "${1:-}" != --* ]]; do
+                    ONLY_SECTIONS+=("$1"); shift
+                done
+                ;;
+            --skip)
+                shift
+                while [[ $# -gt 0 && "${1:-}" != --* ]]; do
+                    SKIP_SECTIONS+=("$1"); shift
+                done
+                ;;
+            --list)
+                list_sections; exit 0
+                ;;
+            *)
+                echo "Unknown argument: $1" >&2
+                echo "Use --list to see available sections." >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+should_run() {
+    local section="$1"
+    if [[ ${#ONLY_SECTIONS[@]} -gt 0 ]]; then
+        for s in "${ONLY_SECTIONS[@]}"; do
+            [[ "$s" == "$section" ]] && return 0
+        done
+        return 1
+    fi
+    for s in "${SKIP_SECTIONS[@]}"; do
+        [[ "$s" == "$section" ]] && return 1
+    done
+    return 0
+}
+
+run_section() {
+    local slug="$1"
+    local fn="$2"
+    if should_run "$slug"; then
+        "$fn"
+    else
+        log_warn "Skipping: $slug"
+    fi
+}
+
+# ─── Section 1: Git Config ────────────────────────────────────────────────────
 
 configure_git() {
-    log_section "Section 2: Git Configuration"
+    log_section "Section 1: Git Configuration"
 
     if [[ -f "$HOME/.gitconfig" ]]; then
         log_warn "~/.gitconfig already exists, skipping"
@@ -39,36 +127,36 @@ configure_git() {
     summary_ok "Git config"
 }
 
-# ─── Section 3: DNF Configuration ────────────────────────────────────────────
+# ─── Section 2: DNF Configuration ────────────────────────────────────────────
 
 configure_dnf() {
-    log_section "Section 3: DNF Configuration"
+    log_section "Section 2: DNF Configuration"
 
     local DNF_CONF="/etc/dnf/dnf.conf"
-    local -A SETTINGS=(
-        [max_parallel_downloads]=10
-        [fastestmirror]=True
-        [defaultyes]=True
+    local SETTINGS=(
+        "max_parallel_downloads=10"
+        "fastestmirror=True"
+        "defaultyes=True"
     )
 
-    for key in "${!SETTINGS[@]}"; do
+    for setting in "${SETTINGS[@]}"; do
+        local key="${setting%%=*}"
         if grep -q "^${key}=" "$DNF_CONF" 2>/dev/null; then
             log_warn "$key already set in dnf.conf"
         else
-            echo "${key}=${SETTINGS[$key]}" | sudo tee -a "$DNF_CONF" > /dev/null
-            log_info "Set ${key}=${SETTINGS[$key]}"
+            echo "$setting" | sudo tee -a "$DNF_CONF" > /dev/null
+            log_info "Set $setting"
         fi
     done
 
     summary_ok "DNF configuration"
 }
 
-# ─── Section 4: Repositories ─────────────────────────────────────────────────
+# ─── Section 3: Repositories ─────────────────────────────────────────────────
 
 enable_repos() {
-    log_section "Section 4: Enable Repositories"
+    log_section "Section 3: Enable Repositories"
 
-    # dnf-plugins-core is required for dnf config-manager and dnf copr
     dnf_install_bulk dnf-plugins-core
 
     # RPM Fusion Free
@@ -141,19 +229,19 @@ EOF
     summary_ok "Repositories"
 }
 
-# ─── Section 5: System Upgrade ───────────────────────────────────────────────
+# ─── Section 4: System Upgrade ───────────────────────────────────────────────
 
 system_upgrade() {
-    log_section "Section 5: System Upgrade"
+    log_section "Section 4: System Upgrade"
     log_info "Running dnf upgrade (this may take a while)..."
     sudo dnf upgrade -y
     summary_ok "System upgrade"
 }
 
-# ─── Section 6: Package Installation ─────────────────────────────────────────
+# ─── Section 5: Package Installation ─────────────────────────────────────────
 
 install_packages() {
-    log_section "Section 6: Package Installation"
+    log_section "Section 5: Package Installation"
 
     dnf_install_bulk \
         `# System tools` \
@@ -189,16 +277,16 @@ install_packages() {
         log_info "Swapping ffmpeg-free → ffmpeg for full codec support..."
         sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
     else
-        log_warn "ffmpeg already correct (ffmpeg-free not present or ffmpeg already installed)"
+        log_warn "ffmpeg already correct"
     fi
 
     summary_ok "Packages"
 }
 
-# ─── Section 6b: Microsoft Fonts ─────────────────────────────────────────────
+# ─── Section 6: Microsoft Fonts ──────────────────────────────────────────────
 
 install_ms_fonts() {
-    log_section "Section 6b: Microsoft Fonts"
+    log_section "Section 6: Microsoft Fonts"
 
     if rpm -q msttcore-fonts-installer &>/dev/null; then
         log_warn "Microsoft fonts already installed, skipping"
@@ -216,10 +304,10 @@ install_ms_fonts() {
     summary_ok "Microsoft fonts"
 }
 
-# ─── Section 6c: yt-dlp and Neovim ───────────────────────────────────────────
+# ─── Section 7: Extra Tools (yt-dlp, Neovim) ─────────────────────────────────
 
 install_extra_tools() {
-    log_section "Section 6c: yt-dlp and Neovim"
+    log_section "Section 7: Extra Tools (yt-dlp, Neovim)"
 
     mkdir -p "$HOME/.local/bin"
 
@@ -232,7 +320,6 @@ install_extra_tools() {
         curl -fLo "$HOME/.local/bin/yt-dlp" \
             https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
         chmod +x "$HOME/.local/bin/yt-dlp"
-        log_info "yt-dlp installed."
         summary_ok "yt-dlp"
     fi
 
@@ -248,15 +335,14 @@ install_extra_tools() {
         sudo tar -C /opt -xzf "$NVIM_TMP"
         sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
         rm -f "$NVIM_TMP"
-        log_info "Neovim installed."
         summary_ok "Neovim"
     fi
 }
 
-# ─── Section 6d: Flatpak + Flathub ───────────────────────────────────────────
+# ─── Section 8: Flatpak + Flathub ────────────────────────────────────────────
 
 setup_flatpak() {
-    log_section "Section 6d: Flatpak + Flathub"
+    log_section "Section 8: Flatpak + Flathub"
 
     dnf_install_bulk flatpak gnome-software-plugin-flatpak
 
@@ -267,24 +353,22 @@ setup_flatpak() {
         log_info "Adding Flathub remote..."
         flatpak remote-add --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
-        log_info "Flathub added."
         summary_ok "Flathub"
     fi
 
-    # Spotify (only available via Flatpak)
     if flatpak list 2>/dev/null | grep -q "com.spotify.Client"; then
         log_warn "Spotify already installed"
     else
         log_info "Installing Spotify..."
         flatpak install -y flathub com.spotify.Client
-        log_info "Spotify installed."
+        summary_ok "Spotify"
     fi
 }
 
-# ─── Section 7: NVIDIA Drivers ───────────────────────────────────────────────
+# ─── Section 9: NVIDIA Drivers ───────────────────────────────────────────────
 
 install_nvidia() {
-    log_section "Section 7: NVIDIA Drivers"
+    log_section "Section 9: NVIDIA Drivers"
 
     if pkg_installed akmod-nvidia; then
         log_warn "akmod-nvidia already installed, skipping"
@@ -317,10 +401,10 @@ install_nvidia() {
     summary_ok "NVIDIA drivers (reboot required)"
 }
 
-# ─── Section 8: Fonts ────────────────────────────────────────────────────────
+# ─── Section 10: Fonts ───────────────────────────────────────────────────────
 
 install_fonts() {
-    log_section "Section 8: Fonts (MesloLGS NF)"
+    log_section "Section 10: Fonts (MesloLGS NF)"
 
     local FONT_DIR="$HOME/.local/share/fonts"
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
@@ -346,16 +430,14 @@ install_fonts() {
     done
 
     fc-cache -fv "$FONT_DIR"
-    log_info "MesloLGS NF installed and font cache updated."
     summary_ok "MesloLGS NF fonts"
 }
 
-# ─── Section 9: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
+# ─── Section 11: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
 
 install_shell_extras() {
-    log_section "Section 9: Oh My Zsh + Powerlevel10k + Plugins"
+    log_section "Section 11: Oh My Zsh + Powerlevel10k + Plugins"
 
-    # Oh My Zsh
     if [[ -d "$HOME/.oh-my-zsh" ]]; then
         log_warn "Oh My Zsh already installed"
     else
@@ -369,7 +451,6 @@ install_shell_extras() {
 
     local ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
 
-    # Powerlevel10k
     if [[ ! -d "$ZSH_CUSTOM/themes/powerlevel10k" ]]; then
         log_info "Installing Powerlevel10k..."
         git clone --depth=1 https://github.com/romkatv/powerlevel10k.git \
@@ -378,17 +459,18 @@ install_shell_extras() {
         log_warn "Powerlevel10k already installed"
     fi
 
-    # External plugins
-    declare -A PLUGINS=(
-        [zsh-autosuggestions]="https://github.com/zsh-users/zsh-autosuggestions"
-        [zsh-completions]="https://github.com/zsh-users/zsh-completions"
-        [zsh-syntax-highlighting]="https://github.com/zsh-users/zsh-syntax-highlighting"
+    local PLUGINS=(
+        "zsh-autosuggestions|https://github.com/zsh-users/zsh-autosuggestions"
+        "zsh-completions|https://github.com/zsh-users/zsh-completions"
+        "zsh-syntax-highlighting|https://github.com/zsh-users/zsh-syntax-highlighting"
     )
 
-    for plugin in "${!PLUGINS[@]}"; do
+    for entry in "${PLUGINS[@]}"; do
+        local plugin="${entry%%|*}"
+        local url="${entry#*|}"
         if [[ ! -d "$ZSH_CUSTOM/plugins/$plugin" ]]; then
             log_info "Installing plugin: $plugin..."
-            git clone --depth=1 "${PLUGINS[$plugin]}" "$ZSH_CUSTOM/plugins/$plugin"
+            git clone --depth=1 "$url" "$ZSH_CUSTOM/plugins/$plugin"
         else
             log_warn "Plugin $plugin already installed"
         fi
@@ -397,10 +479,10 @@ install_shell_extras() {
     summary_ok "Oh My Zsh + Powerlevel10k + plugins"
 }
 
-# ─── Section 10: fnm + Node.js LTS + global packages ─────────────────────────
+# ─── Section 12: fnm + Node.js LTS + global packages ─────────────────────────
 
 install_node() {
-    log_section "Section 10: fnm + Node.js LTS"
+    log_section "Section 12: fnm + Node.js LTS"
 
     local FNM_BIN="$HOME/.local/bin/fnm"
     mkdir -p "$HOME/.local/bin"
@@ -452,10 +534,10 @@ install_node() {
     summary_ok "fnm + Node.js LTS + global packages"
 }
 
-# ─── Section 11: SSH Key Setup ────────────────────────────────────────────────
+# ─── Section 13: SSH Key Setup ────────────────────────────────────────────────
 
 setup_ssh() {
-    log_section "Section 11: SSH Key Setup"
+    log_section "Section 13: SSH Key Setup"
 
     local SSH_KEY="$HOME/.ssh/id_ed25519"
 
@@ -489,10 +571,10 @@ setup_ssh() {
     summary_ok "SSH key"
 }
 
-# ─── Section 12: Services (Docker, Bluetooth, Firewall) ──────────────────────
+# ─── Section 14: Services (Docker, Bluetooth, Firewall) ──────────────────────
 
 setup_services() {
-    log_section "Section 12: Services (Docker, Bluetooth, Firewall)"
+    log_section "Section 14: Services (Docker, Bluetooth, Firewall)"
 
     # Docker
     log_info "Enabling Docker service..."
@@ -524,8 +606,8 @@ setup_services() {
 
     # SSH brute-force rate limiting (max 6 connections per minute)
     if ! sudo firewall-cmd --permanent --list-rich-rules 2>/dev/null | grep -q "ssh.*limit"; then
-        sudo firewall-cmd --permanent --add-rich-rule=\
-'rule service name="ssh" limit value="6/m" accept'
+        sudo firewall-cmd --permanent \
+            --add-rich-rule='rule service name="ssh" limit value="6/m" accept'
         log_info "SSH rate limiting enabled."
     else
         log_warn "SSH rate limiting already configured"
@@ -536,10 +618,10 @@ setup_services() {
     summary_ok "Docker + Bluetooth + Firewall"
 }
 
-# ─── Section 13: Virtualization ──────────────────────────────────────────────
+# ─── Section 15: Virtualization ──────────────────────────────────────────────
 
 setup_virtualization() {
-    log_section "Section 13: Virtualization"
+    log_section "Section 15: Virtualization"
 
     if sudo dnf group list --installed 2>/dev/null | grep -q "Virtualization"; then
         log_warn "Virtualization group already installed"
@@ -563,10 +645,10 @@ setup_virtualization() {
     summary_ok "Virtualization"
 }
 
-# ─── Section 14: Snapper (Btrfs snapshots) ───────────────────────────────────
+# ─── Section 16: Snapper (Btrfs snapshots) ───────────────────────────────────
 
 setup_snapper() {
-    log_section "Section 14: Snapper (Btrfs Snapshots)"
+    log_section "Section 16: Snapper (Btrfs Snapshots)"
 
     if ! findmnt -n -o FSTYPE / 2>/dev/null | grep -q btrfs; then
         log_warn "Root filesystem is not Btrfs — skipping Snapper setup."
@@ -601,14 +683,22 @@ setup_snapper() {
     fi
 
     sudo systemctl enable --now snapper-timeline.timer snapper-cleanup.timer
-    log_info "Snapper configured — auto-snapshots on DNF transactions enabled."
+
+    # Take initial snapshot so there's something to roll back to immediately
+    if ! sudo snapper -c root list 2>/dev/null | grep -q "post-fedora-setup"; then
+        log_info "Taking initial post-setup snapshot..."
+        sudo snapper -c root create --description "post-fedora-setup"
+    else
+        log_warn "Initial snapshot already exists"
+    fi
+
     summary_ok "Snapper (Btrfs snapshots)"
 }
 
-# ─── Section 15: GNOME Configuration ─────────────────────────────────────────
+# ─── Section 17: GNOME Configuration ─────────────────────────────────────────
 
 configure_gnome() {
-    log_section "Section 15: GNOME Configuration"
+    log_section "Section 17: GNOME Configuration"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session detected (running via SSH?). Skipping GNOME settings."
@@ -714,10 +804,10 @@ EOF
     summary_ok "GNOME configuration"
 }
 
-# ─── Section 16: Dotfiles ────────────────────────────────────────────────────
+# ─── Section 18: Dotfiles ────────────────────────────────────────────────────
 
 setup_dotfiles() {
-    log_section "Section 16: Dotfiles"
+    log_section "Section 18: Dotfiles"
 
     local FILES=(
         ".zshrc"
@@ -749,10 +839,10 @@ setup_dotfiles() {
     summary_ok "Dotfiles"
 }
 
-# ─── Section 17: Default Shell ───────────────────────────────────────────────
+# ─── Section 19: Default Shell ───────────────────────────────────────────────
 
 set_default_shell() {
-    log_section "Section 17: Default Shell"
+    log_section "Section 19: Default Shell"
 
     local ZSH_PATH
     ZSH_PATH="$(command -v zsh)"
@@ -807,8 +897,8 @@ reboot_prompt() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    # Redirect stdout and stderr independently through tee so both
-    # appear on terminal and are written to the log file.
+    parse_args "$@"
+
     exec > >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
 
@@ -816,25 +906,27 @@ main() {
     echo ""
 
     preflight_checks
-    configure_git
-    configure_dnf
-    enable_repos
-    system_upgrade
-    install_packages
-    install_ms_fonts
-    install_extra_tools
-    setup_flatpak
-    install_nvidia
-    install_fonts
-    install_shell_extras
-    install_node
-    setup_ssh
-    setup_services
-    setup_virtualization
-    setup_snapper
-    configure_gnome
-    setup_dotfiles
-    set_default_shell
+
+    run_section git           configure_git
+    run_section dnf           configure_dnf
+    run_section repos         enable_repos
+    run_section upgrade       system_upgrade
+    run_section packages      install_packages
+    run_section ms-fonts      install_ms_fonts
+    run_section extra-tools   install_extra_tools
+    run_section flatpak       setup_flatpak
+    run_section nvidia        install_nvidia
+    run_section fonts         install_fonts
+    run_section shell         install_shell_extras
+    run_section node          install_node
+    run_section ssh           setup_ssh
+    run_section services      setup_services
+    run_section virt          setup_virtualization
+    run_section snapper       setup_snapper
+    run_section gnome         configure_gnome
+    run_section dotfiles      setup_dotfiles
+    run_section shell-default set_default_shell
+
     print_summary
     reboot_prompt
 
