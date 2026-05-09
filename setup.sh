@@ -353,6 +353,9 @@ install_packages() {
     fi
 
     # AMD VA-API: hardware video decode offload (reduces CPU load + improves battery)
+    # Only swap x86_64 — i686 variants cause version-mismatch conflicts because
+    # the freeworld i686 pulls in a newer mesa-vulkan-drivers.i686 than the
+    # installed x86_64 version. Flatpak Steam manages its own 32-bit libs anyway.
     for pkg in mesa-va-drivers mesa-vdpau-drivers; do
         local free_pkg="${pkg}-freeworld"
         if pkg_installed "$free_pkg"; then
@@ -362,13 +365,6 @@ install_packages() {
             sudo dnf swap -y "$pkg" "$free_pkg" --allowerasing 2>/dev/null || \
                 sudo dnf install -y "$free_pkg" 2>/dev/null || \
                 log_warn "Could not install $free_pkg"
-        fi
-        # 32-bit variants for Steam/Wine
-        if pkg_installed "${pkg}.i686"; then
-            local free_i686="${free_pkg}.i686"
-            if ! pkg_installed "$free_i686"; then
-                sudo dnf swap -y "${pkg}.i686" "$free_i686" --allowerasing 2>/dev/null || true
-            fi
         fi
     done
     dnf_install_bulk libva-utils
