@@ -272,7 +272,8 @@ EOF
     # ProtonVPN
     if [[ ! -f /etc/yum.repos.d/protonvpn-stable.repo ]]; then
         log_info "Adding ProtonVPN repository..."
-        add_dnf_repo_from_url "https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable.repo"
+        add_dnf_repo_from_url "https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable.repo" || \
+            log_warn "ProtonVPN repo not available for Fedora $(rpm -E %fedora) yet — skipping"
     else
         log_warn "ProtonVPN repo already configured"
     fi
