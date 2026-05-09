@@ -417,6 +417,22 @@ setup_ssh() {
     ssh -T git@github.com 2>&1 | tee -a "$LOG_FILE" || true
 }
 
+# ─── Section 10b: Bluetooth ──────────────────────────────────────────────────
+
+setup_bluetooth() {
+    log_section "Section 10b: Bluetooth"
+
+    dnf_install bluez
+
+    if systemctl is-active --quiet bluetooth; then
+        log_warn "Bluetooth service already running"
+    else
+        log_info "Bluetooth service not running, enabling and starting..."
+        sudo systemctl enable --now bluetooth 2>&1 | tee -a "$LOG_FILE"
+        log_info "Bluetooth service started."
+    fi
+}
+
 # ─── Section 10: Docker Post-install ─────────────────────────────────────────
 
 docker_postinstall() {
@@ -576,6 +592,7 @@ main() {
     install_shell_extras
     install_node
     setup_ssh
+    setup_bluetooth
     docker_postinstall
     configure_gnome
     setup_dotfiles
