@@ -350,17 +350,27 @@ install_extra_tools() {
         summary_ok "Neovim"
     fi
 
-    # opencode (TUI AI assistant)
-    if cmd_exists opencode; then
+    # opencode desktop app (RPM from GitHub releases)
+    if pkg_installed opencode; then
         log_warn "opencode already installed"
         summary_skip "opencode (already installed)"
     else
-        log_info "Installing opencode..."
-        local OC_SCRIPT="/tmp/opencode-install.sh"
-        curl -fsSL https://opencode.ai/install -o "$OC_SCRIPT"
-        bash "$OC_SCRIPT"
-        rm -f "$OC_SCRIPT"
-        summary_ok "opencode"
+        log_info "Installing opencode desktop..."
+        local OC_RPM_URL
+        OC_RPM_URL=$(curl -fsSL https://api.github.com/repos/sst/opencode/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*\.rpm"' \
+            | grep -o 'https://[^"]*' \
+            | head -1)
+        if [[ -z "$OC_RPM_URL" ]]; then
+            log_warn "Could not determine opencode RPM download URL, skipping"
+            summary_fail "opencode"
+        else
+            local OC_RPM="/tmp/opencode.rpm"
+            curl -fLo "$OC_RPM" "$OC_RPM_URL"
+            sudo dnf install -y "$OC_RPM"
+            rm -f "$OC_RPM"
+            summary_ok "opencode desktop"
+        fi
     fi
 }
 
