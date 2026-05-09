@@ -385,6 +385,10 @@ configure_gnome() {
         xdg-mime default vlc.desktop "$mime"
     done
 
+    log_info "Setting power profile to power-saver..."
+    powerprofilesctl set power-saver 2>/dev/null || \
+        log_warn "Could not set power profile (power-profiles-daemon may not be running)"
+
     log_info "Enabling Dash to Dock extension..."
     gnome-extensions enable dash-to-dock@micxgx.gmail.com 2>/dev/null || \
         log_warn "Could not enable Dash to Dock extension (will activate after logout/login)"
