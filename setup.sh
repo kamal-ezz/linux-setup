@@ -644,6 +644,50 @@ configure_gnome() {
         log_warn "Qt theme env vars already set"
     fi
 
+    # Pre-configure qt5ct and qt6ct so Qt apps use dark theme without manual setup
+    for qt_ct in qt5ct qt6ct; do
+        local QT_CONF="$HOME/.config/$qt_ct/$qt_ct.conf"
+        if [[ -f "$QT_CONF" ]]; then
+            log_warn "$qt_ct already configured"
+        else
+            mkdir -p "$HOME/.config/$qt_ct"
+            cat > "$QT_CONF" <<'EOF'
+[Appearance]
+color_scheme_path=
+custom_palette=false
+icon_theme=Papirus-Dark
+standard_dialogs=default
+style=Adwaita-Dark
+
+[Fonts]
+fixed=@Variant(\0\0\0@\0\0\0\x12Adwaita Mono\0\0\0\0\0\0\0\0\0\xfe\0\0\0\x11\0\0\0\0\0P\x10\x81)
+general=@Variant(\0\0\0@\0\0\0\x12Adwaita Sans\0\0\0\0\0\0\0\0\0\xfe\0\0\0\x11\0\0\0\0\0P\x10\x81)
+
+[Interface]
+activate_item_on_single_click=1
+buttonbox_layout=0
+cursor_flash_time=1000
+dialog_buttons_have_icons=1
+double_click_interval=400
+gui_effects=@Invalid()
+keyboard_scheme=2
+menus_have_icons=true
+show_shortcuts_in_context_menus=true
+stylesheets=@Invalid()
+toolbutton_style=4
+underline_shortcut=1
+wheel_scroll_lines=3
+
+[PaletteEditor]
+geometry=@ByteArray()
+
+[SettingsWindow]
+geometry=@ByteArray()
+EOF
+            log_info "$qt_ct configured with Adwaita-Dark theme."
+        fi
+    done
+
     # System
     sudo hostnamectl set-hostname fedora
     sudo timedatectl set-timezone Africa/Casablanca
