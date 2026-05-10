@@ -37,7 +37,7 @@ list_sections() {
     echo "  upgrade      System upgrade"
     echo "  packages     Package installation"
     echo "  ms-fonts     Microsoft fonts"
-    echo "  extra-tools  yt-dlp, Neovim, opencode"
+    echo "  extra-tools  yt-dlp, Neovim, opencode, opencode Desktop"
     echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
     echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
@@ -493,10 +493,10 @@ install_ms_fonts() {
     summary_ok "Microsoft fonts"
 }
 
-# ─── Section 7: Extra Tools (yt-dlp, Neovim) ─────────────────────────────────
+# ─── Section 7: Extra Tools (yt-dlp, Neovim, opencode, opencode Desktop) ──────
 
 install_extra_tools() {
-    log_section "Section 7: Extra Tools (yt-dlp, Neovim)"
+    log_section "Section 7: Extra Tools (yt-dlp, Neovim, opencode, opencode Desktop)"
 
     mkdir -p "$HOME/.local/bin"
 
@@ -540,6 +540,33 @@ install_extra_tools() {
         else
             log_warn "Could not download opencode install script, skipping"
             summary_fail "opencode"
+        fi
+    fi
+
+    # opencode Desktop — RPM from GitHub releases (anomalyco/opencode)
+    if rpm -q opencode-desktop &>/dev/null; then
+        log_warn "opencode Desktop already installed"
+        summary_skip "opencode Desktop (already installed)"
+    else
+        log_info "Installing opencode Desktop..."
+        local OCD_RPM_URL
+        OCD_RPM_URL=$(curl -fsSL "https://api.github.com/repos/anomalyco/opencode/releases/latest" \
+            | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+for a in d.get('assets', []):
+    if a['name'].endswith('x86_64.rpm'):
+        print(a['browser_download_url'])
+        break
+")
+        if [[ -n "$OCD_RPM_URL" ]]; then
+            local OCD_TMP="/tmp/opencode-desktop.rpm"
+            curl -fLo "$OCD_TMP" "$OCD_RPM_URL"
+            dnf_run_optional install -y "$OCD_TMP" && summary_ok "opencode Desktop" || summary_fail "opencode Desktop"
+            rm -f "$OCD_TMP"
+        else
+            log_warn "Could not resolve opencode Desktop RPM URL, skipping"
+            summary_fail "opencode Desktop"
         fi
     fi
 }
