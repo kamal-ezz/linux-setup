@@ -79,7 +79,15 @@ pkg_available() {
     case "$PKG_MGR" in
         dnf)    dnf_pkg_available "$1" ;;
         apt)    apt-cache show "$1" 2>/dev/null | grep -q '^Package:' ;;
-        pacman) pacman -Si "$1" &>/dev/null || _aur_available "$1" ;;
+        pacman)
+            # pacman repo first; if not in repo, optimistically allow — the
+            # install path bootstraps yay and queries AUR. Avoids needing yay
+            # just to answer "is this installable?".
+            pacman -Si "$1" &>/dev/null && return 0
+            _aur_available "$1" && return 0
+            # No yay yet → assume AUR; install path will resolve it.
+            return 0
+            ;;
     esac
 }
 

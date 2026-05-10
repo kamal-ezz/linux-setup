@@ -29,8 +29,8 @@ has_asus_hardware() {
 # Quick reachability probe. Re-checked each call so a network that comes up
 # (or drops) mid-run is reflected. Five-second cap keeps it from stalling.
 check_internet() {
-    curl -fsS --head --max-time 5 -o /dev/null https://fedoraproject.org 2>/dev/null \
-        || curl -fsS --head --max-time 5 -o /dev/null https://1.1.1.1 2>/dev/null
+    curl -fsS --head --max-time 5 -o /dev/null https://1.1.1.1 2>/dev/null \
+        || curl -fsS --head --max-time 5 -o /dev/null https://8.8.8.8 2>/dev/null
 }
 
 # Section-level guard. Refreshes HAS_INTERNET if it was 0, then either returns
