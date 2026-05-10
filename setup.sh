@@ -52,7 +52,7 @@ list_sections() {
     echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
     echo "  gnome        GNOME configuration"
-    echo "  rice         Catppuccin GTK/cursor, Inter font, Blur my Shell, Night Light"
+    echo "  rice         Catppuccin cursor, Inter font, Blur my Shell, Night Light"
     echo "  dotfiles     Dotfiles symlinks"
     echo "  shell-default  Set zsh as default shell"
     echo ""
@@ -103,14 +103,32 @@ should_run() {
     return 0
 }
 
+# Sections that require internet access (downloads, dnf, git clone, flatpak…).
+# Anything not listed runs offline (git config, gnome settings, dotfiles, etc.).
+NETWORK_SECTIONS=(
+    repos upgrade packages ms-fonts extra-tools ghostty flatpak
+    nvidia asus fonts shell node ssh vscode rice virt snapper
+)
+
+section_needs_internet() {
+    local slug="$1" s
+    for s in "${NETWORK_SECTIONS[@]}"; do
+        [[ "$s" == "$slug" ]] && return 0
+    done
+    return 1
+}
+
 run_section() {
     local slug="$1"
     local fn="$2"
-    if should_run "$slug"; then
-        "$fn"
-    else
+    if ! should_run "$slug"; then
         log_warn "Skipping: $slug"
+        return
     fi
+    if section_needs_internet "$slug" && ! require_internet "$slug"; then
+        return
+    fi
+    "$fn"
 }
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -207,7 +225,7 @@ enable_repos() {
     # RPM Fusion Free
     if ! pkg_installed rpmfusion-free-release; then
         log_info "Enabling RPM Fusion Free..."
-        sudo dnf install -y \
+        dnf_run_optional install -y \
             "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
     else
         log_warn "RPM Fusion Free already enabled"
@@ -216,7 +234,7 @@ enable_repos() {
     # RPM Fusion Nonfree
     if ! pkg_installed rpmfusion-nonfree-release; then
         log_info "Enabling RPM Fusion Nonfree..."
-        sudo dnf install -y \
+        dnf_run_optional install -y \
             "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
     else
         log_warn "RPM Fusion Nonfree already enabled"
@@ -262,12 +280,20 @@ EOF
         log_warn "VS Code repo already configured"
     fi
 
-    # PyCharm COPR
-    if ! sudo dnf copr list --enabled 2>/dev/null | grep -q "phracek/PyCharm"; then
-        log_info "Enabling PyCharm COPR..."
-        sudo dnf copr enable -y phracek/PyCharm
+    # GitHub CLI — official upstream repo per cli.github.com docs
+    if [[ ! -f /etc/yum.repos.d/gh-cli.repo ]]; then
+        log_info "Adding GitHub CLI repository..."
+        add_dnf_repo_from_url https://cli.github.com/packages/rpm/gh-cli.repo
     else
-        log_warn "PyCharm COPR already enabled"
+        log_warn "GitHub CLI repo already configured"
+    fi
+
+    # WineHQ — official upstream repo, preferred over Fedora's wine package
+    if [[ ! -f /etc/yum.repos.d/winehq.repo ]]; then
+        log_info "Adding WineHQ repository..."
+        add_dnf_repo_from_url "https://dl.winehq.org/wine-builds/fedora/$(rpm -E %fedora)/winehq.repo"
+    else
+        log_warn "WineHQ repo already configured"
     fi
 
     # ProtonVPN — install via official release RPM (sets up the repo + GPG key)
@@ -276,7 +302,8 @@ EOF
         local PVN_RPM="/tmp/protonvpn-stable-release.rpm"
         local PVN_URL="https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable-release/protonvpn-stable-release-1.0.3-1.noarch.rpm"
         if curl -fLo "$PVN_RPM" "$PVN_URL" 2>/dev/null; then
-            sudo dnf install -y "$PVN_RPM" && sudo dnf check-update --refresh 2>/dev/null || true
+            dnf_run_optional install -y "$PVN_RPM"
+            sudo dnf check-update --refresh 2>/dev/null || true
             rm -f "$PVN_RPM"
         else
             log_warn "ProtonVPN repo RPM not available for Fedora $(rpm -E %fedora) — skipping"
@@ -293,7 +320,7 @@ EOF
 system_upgrade() {
     log_section "Section 4: System Upgrade"
     log_info "Running dnf upgrade with refreshed metadata (this may take a while)..."
-    sudo dnf upgrade --refresh -y
+    dnf_run_optional upgrade --refresh -y
 
     # Firmware updates via fwupd (UEFI, SSD, peripherals)
     if cmd_exists fwupdmgr; then
@@ -310,51 +337,104 @@ system_upgrade() {
 
 # ─── Section 5: Package Installation ─────────────────────────────────────────
 
+install_docker_engine() {
+    # Docker's Fedora install docs say to remove conflicting unofficial/Fedora
+    # Docker packages before installing Docker Engine from download.docker.com.
+    local conflicts=(
+        docker docker-client docker-client-latest docker-common docker-latest
+        docker-latest-logrotate docker-logrotate docker-selinux
+        docker-engine-selinux docker-engine podman-docker
+        moby-engine docker-cli containerd
+    )
+    local to_remove=()
+    local pkg
+
+    for pkg in "${conflicts[@]}"; do
+        rpm -q "$pkg" &>/dev/null && to_remove+=("$pkg")
+    done
+
+    if [[ ${#to_remove[@]} -gt 0 ]]; then
+        log_warn "Removing Docker-conflicting packages per Docker docs: ${to_remove[*]}"
+        dnf_run_optional remove -y "${to_remove[@]}"
+    fi
+
+    dnf_install_bulk docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
 install_packages() {
     log_section "Section 5: Package Installation"
 
     # Steam/Wine pull 32-bit (i686) libraries. If installed x86_64 packages are
     # one build behind the i686 packages in current metadata, DNF can hit file
-    # conflicts (for example mesa-vulkan-drivers or gnutls). Sync these first.
+    # conflicts (for example mesa-vulkan-drivers or gnutls). Sync these first —
+    # but only when both arches have the same latest evr in the repos. Mirror
+    # lag (i686 ahead of x86_64) would otherwise upgrade i686 alone and produce
+    # the very conflict we're trying to avoid.
     log_info "Synchronizing multilib-sensitive packages before installing Steam/Wine..."
-    sudo dnf distro-sync --refresh -y mesa-vulkan-drivers gnutls || \
-        log_warn "Could not synchronize mesa-vulkan-drivers/gnutls; continuing"
+    mapfile -t multilib_specs < <(dnf_multilib_synced_specs mesa-vulkan-drivers gnutls)
+    if [[ ${#multilib_specs[@]} -gt 0 ]]; then
+        dnf_run_optional distro-sync --refresh --allowerasing -y "${multilib_specs[@]}" || \
+            log_warn "Could not synchronize mesa-vulkan-drivers/gnutls; continuing"
+    else
+        log_warn "Skipping multilib sync: no arch-aligned upgrades available right now"
+    fi
 
-    dnf_install_bulk \
-        `# System tools` \
-        zsh git gh curl wget unzip tar bat fzf htop cabextract fastfetch \
-        `# Dev tools` \
-        docker-ce docker-ce-cli containerd.io podman \
-        python3 python3-pip java-21-openjdk \
-        golang gcc gcc-c++ make cmake clang \
-        `# Media & codecs` \
-        vlc ffmpeg \
-        gstreamer1-plugins-good gstreamer1-plugins-bad-free \
-        gstreamer1-plugins-ugly gstreamer1-libav \
-        mozilla-openh264 \
-        `# Gaming` \
-        gamemode mangohud lutris goverlay wine \
-        `# Apps` \
-        google-chrome-stable libreoffice steam code \
-        proton-vpn-gnome-desktop \
-        `# GNOME` \
-        papirus-icon-theme gnome-tweaks \
-        gnome-shell-extension-dash-to-dock \
-        gnome-shell-extension-appindicator \
-        gnome-shell-extension-manager \
-        `# Qt theming` \
-        qt5ct qt6ct \
-        `# Fonts` \
-        google-noto-sans-arabic-fonts \
-        google-noto-naskh-arabic-fonts \
-        amiri-fonts \
-        `# Bluetooth` \
+    install_docker_engine
+
+    local java_pkg=""
+    java_pkg="$(dnf_first_available java-21-openjdk java-latest-openjdk java-17-openjdk || true)"
+    if [[ -z "$java_pkg" ]]; then
+        log_warn "No OpenJDK package found in enabled repositories; skipping Java"
+    fi
+
+    local packages=(
+        # System tools (gh comes from the official cli.github.com repo, pinned via --repo)
+        zsh git curl wget unzip tar bat fzf htop cabextract fastfetch
+        # Dev tools
+        podman python3 python3-pip golang gcc gcc-c++ make cmake clang
+        # Media & codecs. Fedora/RPM Fusion package name for libav is gstreamer1-plugin-libav.
+        vlc ffmpeg gstreamer1-plugins-good gstreamer1-plugins-bad-free
+        gstreamer1-plugins-ugly gstreamer1-plugin-libav mozilla-openh264
+        # Gaming
+        gamemode mangohud lutris goverlay
+        # Apps
+        google-chrome-stable libreoffice steam code proton-vpn-gnome-desktop
+        # GNOME
+        papirus-icon-theme gnome-tweaks
+        gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator
+        # Qt theming
+        qt5ct qt6ct
+        # Fonts
+        google-noto-sans-arabic-fonts google-noto-naskh-arabic-fonts amiri-fonts
+        # Bluetooth
         bluez
+    )
+    [[ -n "$java_pkg" ]] && packages+=("$java_pkg")
+
+    dnf_install_bulk "${packages[@]}"
+
+    # GitHub CLI — pin to the official cli.github.com repo, per upstream docs.
+    if ! pkg_installed gh; then
+        log_info "Installing gh from the official GitHub CLI repo..."
+        dnf_run_optional install -y --repo gh-cli gh || \
+            log_warn "Could not install gh from gh-cli repo"
+    else
+        log_warn "gh already installed"
+    fi
+
+    # WineHQ stable — installed from the upstream repo added in enable_repos.
+    # Kept separate from the bulk install so its multilib deps don't tangle
+    # with the rest of the transaction.
+    if [[ -f /etc/yum.repos.d/winehq.repo ]] && ! pkg_installed winehq-stable; then
+        log_info "Installing winehq-stable from WineHQ repo..."
+        dnf_run_optional install -y winehq-stable || \
+            log_warn "winehq-stable install failed; you may need to retry after multilib metadata syncs"
+    fi
 
     # Swap ffmpeg-free → full ffmpeg for complete codec support
     if rpm -q ffmpeg-free &>/dev/null && ! rpm -q ffmpeg &>/dev/null; then
         log_info "Swapping ffmpeg-free → ffmpeg for full codec support..."
-        sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
+        dnf_run_optional swap -y ffmpeg-free ffmpeg --allowerasing
     else
         log_warn "ffmpeg already correct"
     fi
@@ -370,7 +450,7 @@ install_packages() {
             log_warn "$free_pkg already installed"
         else
             log_info "Swapping ${pkg}.x86_64 → ${free_pkg}.x86_64..."
-            (sudo dnf swap -y "${pkg}.x86_64" "${free_pkg}.x86_64" --allowerasing) || \
+            (dnf_run_optional swap -y "${pkg}.x86_64" "${free_pkg}.x86_64" --allowerasing) || \
                 log_warn "Could not swap $pkg → $free_pkg — skipping"
         fi
     done
@@ -384,7 +464,7 @@ install_packages() {
     done
     if [[ ${#to_remove[@]} -gt 0 ]]; then
         log_info "Removing bloat: ${to_remove[*]}"
-        sudo dnf remove -y "${to_remove[@]}"
+        dnf_run_optional remove -y "${to_remove[@]}"
     else
         log_warn "Bloat already removed"
     fi
@@ -407,7 +487,7 @@ install_ms_fonts() {
     log_info "Downloading Microsoft fonts installer..."
     curl -fLo "$TMP_RPM" \
         "https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm"
-    sudo dnf install -y "$TMP_RPM"
+    dnf_run_optional install -y "$TMP_RPM"
     rm -f "$TMP_RPM"
     log_info "Microsoft fonts installed."
     summary_ok "Microsoft fonts"
@@ -447,26 +527,19 @@ install_extra_tools() {
         summary_ok "Neovim"
     fi
 
-    # opencode desktop app (RPM from GitHub releases)
-    if pkg_installed opencode; then
+    # opencode — official install script per https://opencode.ai/docs/
+    if cmd_exists opencode; then
         log_warn "opencode already installed"
         summary_skip "opencode (already installed)"
     else
-        log_info "Installing opencode desktop..."
-        local OC_RPM_URL
-        OC_RPM_URL=$(curl -fsSL https://api.github.com/repos/sst/opencode/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*\.rpm"' \
-            | grep -o 'https://[^"]*' \
-            | head -1 || true)
-        if [[ -z "$OC_RPM_URL" ]]; then
-            log_warn "Could not determine opencode RPM download URL, skipping"
-            summary_fail "opencode"
+        log_info "Installing opencode via the official install script..."
+        local OC_SCRIPT="/tmp/opencode-install.sh"
+        if curl -fsSL https://opencode.ai/install -o "$OC_SCRIPT"; then
+            bash "$OC_SCRIPT" && summary_ok "opencode" || summary_fail "opencode"
+            rm -f "$OC_SCRIPT"
         else
-            local OC_RPM="/tmp/opencode.rpm"
-            curl -fLo "$OC_RPM" "$OC_RPM_URL"
-            sudo dnf install -y "$OC_RPM"
-            rm -f "$OC_RPM"
-            summary_ok "opencode desktop"
+            log_warn "Could not download opencode install script, skipping"
+            summary_fail "opencode"
         fi
     fi
 }
@@ -553,6 +626,15 @@ setup_flatpak() {
         flatpak install -y flathub com.spotify.Client
         summary_ok "Spotify"
     fi
+
+    # GNOME Extension Manager is distributed via Flathub as documented upstream.
+    if flatpak list 2>/dev/null | grep -q "com.mattjakeman.ExtensionManager"; then
+        log_warn "Extension Manager already installed"
+    else
+        log_info "Installing GNOME Extension Manager from Flathub..."
+        flatpak install -y flathub com.mattjakeman.ExtensionManager
+        summary_ok "GNOME Extension Manager"
+    fi
 }
 
 # ─── Section 10: NVIDIA Drivers ───────────────────────────────────────────────
@@ -573,7 +655,7 @@ install_nvidia() {
     fi
 
     log_info "Installing NVIDIA drivers..."
-    sudo dnf install -y \
+    dnf_run_optional install -y \
         akmod-nvidia \
         xorg-x11-drv-nvidia-cuda \
         xorg-x11-drv-nvidia-libs.i686 \
@@ -613,7 +695,7 @@ install_asus_tools() {
     else
         log_info "ASUS hardware detected. Enabling ASUS Linux COPR..."
         if ! sudo dnf copr list --enabled 2>/dev/null | grep -q "lukenukem/asus-linux"; then
-            if ! sudo dnf copr enable -y lukenukem/asus-linux; then
+            if ! dnf_run_with_repair copr enable -y lukenukem/asus-linux; then
                 log_warn "Could not enable lukenukem/asus-linux COPR — skipping ASUS tools"
                 summary_fail "ASUS tools"
                 return 0
@@ -623,7 +705,7 @@ install_asus_tools() {
         fi
 
         log_info "Installing asusctl and supergfxctl..."
-        if ! sudo dnf install -y asusctl supergfxctl; then
+        if ! dnf_run_with_repair install -y asusctl supergfxctl; then
             log_warn "Could not install ASUS tools — skipping"
             summary_fail "ASUS tools"
             return 0
@@ -765,18 +847,24 @@ install_node() {
         return 0
     fi
 
+    # pkg → CLI binary used to detect a working install installed elsewhere
+    # (e.g. pi-coding-agent ships its own pi-node prefix containing pnpm,
+    # which `npm list -g` against fnm's prefix would miss).
     local NPM_GLOBALS=(
-        "@anthropic-ai/claude-code"
-        "@earendil-works/pi-coding-agent"
-        "pnpm"
+        "@anthropic-ai/claude-code|claude"
+        "@earendil-works/pi-coding-agent|pi"
+        "pnpm|pnpm"
     )
 
-    for pkg in "${NPM_GLOBALS[@]}"; do
-        if "$NPM_BIN" list -g "$pkg" &>/dev/null; then
+    for entry in "${NPM_GLOBALS[@]}"; do
+        local pkg="${entry%%|*}"
+        local bin="${entry#*|}"
+        if "$NPM_BIN" list -g "$pkg" &>/dev/null || cmd_exists "$bin"; then
             log_warn "$pkg already installed"
         else
             log_info "Installing $pkg..."
-            "$NPM_BIN" install -g "$pkg"
+            "$NPM_BIN" install -g "$pkg" || \
+                log_warn "Could not install $pkg — continuing"
         fi
     done
 
@@ -847,7 +935,7 @@ setup_services() {
     # Firewall
     log_info "Configuring firewall..."
     sudo systemctl enable --now firewalld
-    sudo firewall-cmd --set-default-zone=public --permanent
+    sudo firewall-cmd --set-default-zone=public
 
     sudo firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
     log_warn "Inbound HTTP/HTTPS are not opened by default; add them manually if this machine hosts web services."
@@ -975,8 +1063,8 @@ setup_virtualization() {
     fi
 
     log_info "Installing virtualization group..."
-    sudo dnf groupinstall -y "Virtualization"
-    sudo systemctl enable --now libvirtd
+    dnf_run_optional groupinstall -y "Virtualization"
+    sudo systemctl enable --now libvirtd || log_warn "Could not enable libvirtd"
 
     for group in libvirt kvm; do
         if user_in_group "$group"; then
@@ -1144,8 +1232,10 @@ configure_gnome() {
         return
     fi
 
-    # Interface
+    # Interface. Do not force GTK_THEME/gtk-theme: that breaks GTK4/libadwaita apps
+    # like GNOME Settings. Use the supported dark preference instead.
     gsettings set org.gnome.desktop.interface color-scheme  'prefer-dark'
+    gsettings reset org.gnome.desktop.interface gtk-theme 2>/dev/null || true
     gsettings set org.gnome.desktop.interface icon-theme    'Papirus-Dark'
 
     # Keyboard layouts
@@ -1155,9 +1245,6 @@ configure_gnome() {
     gsettings set org.gnome.desktop.peripherals.touchpad click-method   'areas'
     gsettings set org.gnome.desktop.peripherals.touchpad tap-to-click   true
     gsettings set org.gnome.desktop.peripherals.touchpad natural-scroll true
-
-    # Window management
-    gsettings set org.gnome.desktop.wm.preferences button-layout 'appmenu:minimize,maximize,close'
 
     # Dock
     gsettings set org.gnome.shell favorite-apps \
@@ -1171,14 +1258,28 @@ configure_gnome() {
         xdg-mime default vlc.desktop "$mime"
     done
 
-    # Qt dark theme for non-GTK apps
+    # Qt platform theme for non-GTK apps. Also remove any old GTK_THEME override:
+    # it is a blunt GTK env var and makes GTK4/libadwaita apps look broken.
     local ENV_FILE="/etc/environment"
-    if ! grep -q "QT_QPA_PLATFORMTHEME" "$ENV_FILE" 2>/dev/null; then
-        printf "\nQT_QPA_PLATFORMTHEME=qt6ct\nGTK_THEME=Adwaita:dark\n" | \
-            sudo tee -a "$ENV_FILE" > /dev/null
-        log_info "Qt dark theme environment variables set."
+    if grep -q '^GTK_THEME=' "$ENV_FILE" 2>/dev/null; then
+        sudo sed -i '/^GTK_THEME=/d' "$ENV_FILE"
+        log_info "Removed GTK_THEME override from /etc/environment."
+    fi
+    # If a prior run exported GTK_THEME into the already-running user manager,
+    # logout may not clear it while other sessions are still active. Override it
+    # to empty for this boot; a full user-manager restart/reboot removes it.
+    if systemctl --user show-environment 2>/dev/null | grep -q '^GTK_THEME='; then
+        systemctl --user set-environment GTK_THEME= 2>/dev/null || true
+        dbus-update-activation-environment --systemd GTK_THEME= 2>/dev/null || true
+        log_warn "Cleared stale GTK_THEME for this session; reboot to remove it entirely."
+    fi
+    if grep -q '^QT_QPA_PLATFORMTHEME=' "$ENV_FILE" 2>/dev/null; then
+        sudo sed -i 's/^QT_QPA_PLATFORMTHEME=.*/QT_QPA_PLATFORMTHEME=qt6ct/' "$ENV_FILE"
+        log_info "Qt platform theme environment variable already present."
     else
-        log_warn "Qt theme env vars already set"
+        printf "\nQT_QPA_PLATFORMTHEME=qt6ct\n" | \
+            sudo tee -a "$ENV_FILE" > /dev/null
+        log_info "Qt platform theme environment variable set."
     fi
 
     # Pre-configure qt5ct and qt6ct so Qt apps use dark theme without manual setup
@@ -1272,7 +1373,7 @@ EOF
 # ─── Section 21: Ricing ───────────────────────────────────────────────────────
 
 setup_rice() {
-    log_section "Section 21: Ricing (Catppuccin theme + cursor + fonts + extensions)"
+    log_section "Section 21: Ricing (Catppuccin cursor + fonts + extensions)"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session — skipping rice setup"
@@ -1303,26 +1404,8 @@ setup_rice() {
         fi
     fi
 
-    # Catppuccin GTK theme
-    if ls "$HOME/.local/share/themes/" 2>/dev/null | grep -qi "catppuccin.*mocha"; then
-        log_warn "Catppuccin GTK theme already installed"
-    else
-        log_info "Installing Catppuccin GTK theme..."
-        local THEME_ZIP="/tmp/catppuccin-gtk.zip"
-        local THEME_URL
-        THEME_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/gtk/releases/latest \
-            | grep -oi '"browser_download_url": *"[^"]*[Mm]ocha[^"]*[Bb]lue[^"]*[Dd]ark[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1 || true)
-        if [[ -z "$THEME_URL" ]]; then
-            log_warn "Could not resolve Catppuccin GTK theme URL, skipping"
-        else
-            curl -fLo "$THEME_ZIP" "$THEME_URL"
-            mkdir -p "$HOME/.local/share/themes"
-            unzip -q "$THEME_ZIP" -d "$HOME/.local/share/themes/"
-            rm -f "$THEME_ZIP"
-            log_info "Catppuccin GTK theme installed."
-        fi
-    fi
+    # GTK theme: use GNOME default (Adwaita). Reset in case a prior run set Catppuccin.
+    gsettings reset org.gnome.desktop.interface gtk-theme 2>/dev/null || true
 
     # Catppuccin cursor
     if ls "$HOME/.local/share/icons/" 2>/dev/null | grep -qi "catppuccin.*mocha.*cursor"; then
@@ -1345,12 +1428,7 @@ setup_rice() {
         fi
     fi
 
-    # Apply themes
-    local GTK_THEME
-    GTK_THEME=$(ls "$HOME/.local/share/themes/" 2>/dev/null | grep -i "catppuccin.*mocha" | head -1 || true)
-    [[ -n "$GTK_THEME" ]] && \
-        gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
-
+    # Apply cursor theme
     local CURSOR_THEME
     CURSOR_THEME=$(ls "$HOME/.local/share/icons/" 2>/dev/null | grep -i "catppuccin.*mocha.*cursor" | head -1 || true)
     [[ -n "$CURSOR_THEME" ]] && \
@@ -1391,6 +1469,8 @@ setup_dotfiles() {
         ".p10k.zsh"
         ".config/ghostty/config"
         ".config/fontconfig/fonts.conf"
+        ".pi/agent/settings.json"
+        ".pi/agent/extensions/effort.ts"
     )
 
     for file in "${FILES[@]}"; do

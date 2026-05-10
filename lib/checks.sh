@@ -27,11 +27,14 @@ preflight_checks() {
     trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null; err_handler \$LINENO" ERR
     trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null" EXIT
 
-    if ! curl -s --head --max-time 5 https://fedoraproject.org | grep -q "200\|301\|302"; then
-        log_error "No internet connection detected. Please connect and retry."
-        exit 1
+    if check_internet; then
+        log_info "Network connectivity confirmed"
+        HAS_INTERNET=1
+    else
+        log_warn "No internet connection detected — sections that require network access will be skipped."
+        HAS_INTERNET=0
     fi
-    log_info "Network connectivity confirmed"
+    export HAS_INTERNET
 
     local free_gb
     free_gb=$(df -BG / | awk 'NR==2 {gsub("G",""); print $4}')
