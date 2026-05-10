@@ -9,11 +9,11 @@ preflight_checks() {
     fi
     log_info "Running as user: $USER"
 
-    if ! source /etc/os-release 2>/dev/null || [[ "$ID" != "fedora" ]]; then
-        log_error "This script requires Fedora. Detected: ${ID:-unknown}"
-        exit 1
+    detect_distro
+    log_info "$DISTRO ${VERSION_ID:-} detected (family: $DISTRO_FAMILY, pkg-mgr: $PKG_MGR)"
+    if [[ "$DISTRO" != "fedora" ]]; then
+        log_warn "Non-Fedora paths are best-effort and untested. Report issues if you hit them."
     fi
-    log_info "Fedora $VERSION_ID detected"
 
     if ! sudo -v 2>/dev/null; then
         log_error "sudo access is required but not available."

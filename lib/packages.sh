@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# Per-distro package name mappings.
+#
+# Returns a space-separated list of package names for the current distro.
+# Functions are named pkgs_<group> and read $DISTRO_FAMILY to branch.
+#
+# Usage:
+#   pkg_install $(pkgs_system_tools)
+#
+# Mapping principles:
+# - One function per logical group (system_tools, dev, codecs, ...).
+# - Each function echoes packages, no side effects.
+# - When a Fedora-specific package has no equivalent (e.g. RPM Fusion freeworld
+#   codecs, mozilla-openh264), it's omitted on other distros — those distros
+#   ship working codecs by default.
+
+# ─── System tools ─────────────────────────────────────────────────────────────
+
+pkgs_system_tools() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
+        debian) echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
+        arch)   echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
+    esac
+}
+
+# ─── Dev tools ────────────────────────────────────────────────────────────────
+
+pkgs_dev() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "podman python3 python3-pip golang gcc gcc-c++ make cmake clang" ;;
+        debian) echo "podman python3 python3-pip golang-go gcc g++ make cmake clang" ;;
+        arch)   echo "podman python python-pip go gcc make cmake clang" ;;
+    esac
+}
+
+# ─── Java (LTS preferred) ─────────────────────────────────────────────────────
+# Echoes a candidate list — caller uses pkg_install_one to pick the first found.
+
+pkgs_java_candidates() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "java-21-openjdk java-latest-openjdk java-17-openjdk" ;;
+        debian) echo "openjdk-21-jdk openjdk-17-jdk default-jdk" ;;
+        arch)   echo "jdk21-openjdk jdk17-openjdk jdk-openjdk" ;;
+    esac
+}
+
+# ─── Codecs / multimedia ──────────────────────────────────────────────────────
+# On Fedora, requires RPM Fusion (handled in repos section).
+# Ubuntu ships codecs in universe/multiverse; Arch ships in extra.
+
+pkgs_codecs() {
+    case "$DISTRO_FAMILY" in
+        fedora)
+            echo "vlc ffmpeg gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+                  gstreamer1-plugins-ugly gstreamer1-plugin-libav mozilla-openh264"
+            ;;
+        debian)
+            echo "vlc ffmpeg gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+                  gstreamer1.0-plugins-ugly gstreamer1.0-libav ubuntu-restricted-extras"
+            ;;
+        arch)
+            echo "vlc ffmpeg gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+            ;;
+    esac
+}
+
+# ─── Gaming ───────────────────────────────────────────────────────────────────
+
+pkgs_gaming() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "gamemode mangohud lutris goverlay" ;;
+        debian) echo "gamemode mangohud lutris goverlay" ;;
+        arch)   echo "gamemode mangohud lutris goverlay" ;;
+    esac
+}
+
+# ─── Steam (separate; multilib handling differs) ──────────────────────────────
+
+pkgs_steam() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "steam" ;;       # from RPM Fusion
+        debian) echo "steam-installer" ;;
+        arch)   echo "steam" ;;       # multilib repo must be enabled
+    esac
+}
+
+# ─── GNOME tweaks / extensions / themes ───────────────────────────────────────
+
+pkgs_gnome() {
+    case "$DISTRO_FAMILY" in
+        fedora)
+            echo "papirus-icon-theme gnome-tweaks \
+                  gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator"
+            ;;
+        debian)
+            echo "papirus-icon-theme gnome-tweaks \
+                  gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator"
+            ;;
+        arch)
+            # dash-to-dock and appindicator are AUR on Arch
+            echo "papirus-icon-theme gnome-tweaks \
+                  gnome-shell-extension-dash-to-dock-git gnome-shell-extension-appindicator"
+            ;;
+    esac
+}
+
+# ─── Qt platform theming ──────────────────────────────────────────────────────
+
+pkgs_qt() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "qt5ct qt6ct" ;;
+        debian) echo "qt5ct qt6ct" ;;
+        arch)   echo "qt5ct qt6ct" ;;
+    esac
+}
+
+# ─── Arabic fonts ─────────────────────────────────────────────────────────────
+
+pkgs_fonts_arabic() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "google-noto-sans-arabic-fonts google-noto-naskh-arabic-fonts amiri-fonts" ;;
+        debian) echo "fonts-noto fonts-noto-core fonts-hosny-amiri" ;;
+        arch)   echo "noto-fonts ttf-amiri" ;;
+    esac
+}
+
+# ─── Bluetooth ────────────────────────────────────────────────────────────────
+
+pkgs_bluetooth() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "bluez" ;;
+        debian) echo "bluez" ;;
+        arch)   echo "bluez bluez-utils" ;;
+    esac
+}
+
+# ─── Apps (Chrome, LibreOffice) ──────────────────────────────────────────────
+# VS Code, Chrome, ProtonVPN are installed via their own vendor repos, handled
+# in the repos section. LibreOffice and others come from distro repos.
+
+pkgs_libreoffice() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "libreoffice" ;;
+        debian) echo "libreoffice" ;;
+        arch)   echo "libreoffice-fresh" ;;
+    esac
+}
+
+# ─── Bloat to remove ──────────────────────────────────────────────────────────
+
+pkgs_bloat() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
+        debian) echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
+        arch)   echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
+    esac
+}
+
+# ─── Ghostty build deps ───────────────────────────────────────────────────────
+
+pkgs_ghostty_build_deps() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "gtk4-devel gtk4-layer-shell-devel libadwaita-devel gettext" ;;
+        debian) echo "libgtk-4-dev libgtk4-layer-shell-dev libadwaita-1-dev gettext" ;;
+        arch)   echo "gtk4 gtk4-layer-shell libadwaita gettext" ;;
+    esac
+}
+
+# ─── Virtualization ───────────────────────────────────────────────────────────
+
+pkgs_virt() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "qemu-kvm libvirt virt-manager virt-install bridge-utils edk2-ovmf swtpm" ;;
+        debian) echo "qemu-kvm libvirt-daemon-system virt-manager virtinst bridge-utils ovmf swtpm" ;;
+        arch)   echo "qemu-full libvirt virt-manager bridge-utils edk2-ovmf swtpm dnsmasq" ;;
+    esac
+}
+
+# ─── Snapper (BTRFS) ──────────────────────────────────────────────────────────
+
+pkgs_snapper() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "snapper python3-dnf-plugins-extras-snapper btrfs-assistant" ;;
+        debian) echo "snapper btrfs-assistant" ;;
+        arch)   echo "snapper snap-pac btrfs-assistant" ;;
+    esac
+}
+
+# ─── Firewall ─────────────────────────────────────────────────────────────────
+
+pkgs_firewall() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "firewalld" ;;
+        debian) echo "ufw" ;;
+        arch)   echo "firewalld" ;;
+    esac
+}
+
+# ─── Docker engine packages (when using upstream repo) ────────────────────────
+
+pkgs_docker_engine() {
+    # Same names across upstream Docker repos for all distros
+    echo "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+}
+
+pkgs_docker_conflicts() {
+    case "$DISTRO_FAMILY" in
+        fedora)
+            echo "docker docker-client docker-client-latest docker-common docker-latest \
+                  docker-latest-logrotate docker-logrotate docker-selinux \
+                  docker-engine-selinux docker-engine podman-docker \
+                  moby-engine docker-cli containerd"
+            ;;
+        debian)
+            echo "docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc"
+            ;;
+        arch)
+            echo "docker"
+            ;;
+    esac
+}
+
+# ─── Microsoft fonts ──────────────────────────────────────────────────────────
+# Each distro has a different mechanism — caller branches on $DISTRO_FAMILY.
+
+pkgs_ms_fonts() {
+    case "$DISTRO_FAMILY" in
+        debian) echo "ttf-mscorefonts-installer" ;;   # universe/multiverse
+        arch)   echo "ttf-ms-fonts" ;;                # AUR
+        # fedora handled separately (RPM download)
+    esac
+}

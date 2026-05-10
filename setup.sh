@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Fedora post-install setup script
+# Linux post-install setup script (Fedora, Ubuntu/Debian, Arch)
 # Run as your regular user (not root), from a desktop session.
+#
+# Tested on: Fedora.
+# Best-effort, untested on: Ubuntu, Debian, Arch.
 #
 # Usage:
 #   bash setup.sh                        # run all sections
@@ -10,7 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="$HOME/.fedora-setup.log"
+LOG_FILE="$HOME/.linux-setup.log"
 DOTFILES_DIR="$SCRIPT_DIR/dotfiles"
 BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
 START_TIME=$(date +%s)
@@ -21,6 +24,8 @@ declare -a SKIP_SECTIONS=()
 
 source "$SCRIPT_DIR/lib/colors.sh"
 source "$SCRIPT_DIR/lib/utils.sh"
+source "$SCRIPT_DIR/lib/distro.sh"
+source "$SCRIPT_DIR/lib/packages.sh"
 source "$SCRIPT_DIR/lib/checks.sh"
 
 summary_ok()   { SUMMARY+=("  ${GREEN}✓${NC}  $*"); }
@@ -319,8 +324,8 @@ EOF
 
 system_upgrade() {
     log_section "Section 4: System Upgrade"
-    log_info "Running dnf upgrade with refreshed metadata (this may take a while)..."
-    dnf_run_optional upgrade --refresh -y
+    log_info "Running system upgrade with refreshed metadata (this may take a while)..."
+    pm_upgrade
 
     # Firmware updates via fwupd (UEFI, SSD, peripherals)
     if cmd_exists fwupdmgr; then
