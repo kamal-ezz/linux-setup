@@ -501,7 +501,8 @@ install_wine() {
             fi
             ;;
         debian)
-            pkg_install --install-recommends winehq-stable || pkg_install winehq-stable
+            sudo apt-get install -y --install-recommends winehq-stable \
+                || log_warn "winehq-stable install failed (multilib/i386 arch may need setup)"
             ;;
         arch)
             pkg_install wine wine-mono wine-gecko

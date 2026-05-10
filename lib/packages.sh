@@ -98,9 +98,9 @@ pkgs_gnome() {
                   gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator"
             ;;
         arch)
-            # dash-to-dock and appindicator are AUR on Arch
+            # dash-to-dock and appindicator are AUR on Arch (non-git releases)
             echo "papirus-icon-theme gnome-tweaks \
-                  gnome-shell-extension-dash-to-dock-git gnome-shell-extension-appindicator"
+                  gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator"
             ;;
     esac
 }
