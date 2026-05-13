@@ -11,13 +11,18 @@ preflight_checks() {
 
     detect_distro
     log_info "$DISTRO ${VERSION_ID:-} detected (family: $DISTRO_FAMILY, pkg-mgr: $PKG_MGR)"
-    if [[ "$DISTRO" != "fedora" ]]; then
+    if [[ "$DISTRO" == "macos" ]]; then
+        log_info "macOS detected — Linux-only sections (NVIDIA, ASUS, GRUB, systemd, Snapper) will be skipped"
+        # Bootstrap Homebrew early: every subsequent section on macOS depends on
+        # it, and the user may run a single section via --only without Section 2.
+        bootstrap_homebrew
+    elif [[ "$DISTRO" != "fedora" ]]; then
         log_warn "Non-Fedora paths are best-effort and untested. Report issues if you hit them."
     fi
 
     detect_desktop
     log_info "Desktop environment: $DESKTOP_ENV"
-    if [[ "$DESKTOP_ENV" != "gnome" && "$DESKTOP_ENV" != "none" ]]; then
+    if is_linux && [[ "$DESKTOP_ENV" != "gnome" && "$DESKTOP_ENV" != "none" ]]; then
         log_warn "GNOME-specific sections (Section 20 GNOME config, Section 21 ricing) will be skipped on $DESKTOP_ENV."
     fi
 
@@ -43,7 +48,11 @@ preflight_checks() {
     export HAS_INTERNET
 
     local free_gb
-    free_gb=$(df -BG / | awk 'NR==2 {gsub("G",""); print $4}')
+    if is_macos; then
+        free_gb=$(df -g / | awk 'NR==2 {print $4}')
+    else
+        free_gb=$(df -BG / | awk 'NR==2 {gsub("G",""); print $4}')
+    fi
     if [[ "$free_gb" -lt 20 ]]; then
         log_error "Insufficient disk space: ${free_gb}GB free, 20GB required."
         exit 1

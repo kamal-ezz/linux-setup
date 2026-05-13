@@ -13,6 +13,8 @@
 # - When a Fedora-specific package has no equivalent (e.g. RPM Fusion freeworld
 #   codecs, mozilla-openh264), it's omitted on other distros — those distros
 #   ship working codecs by default.
+# - darwin functions return Homebrew formula/cask names. Casks (GUI apps) are
+#   detected automatically via _brew_is_cask() in distro.sh.
 
 # ─── System tools ─────────────────────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ pkgs_system_tools() {
         fedora) echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
         debian) echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
         arch)   echo "zsh git curl wget unzip tar bat fzf htop cabextract fastfetch" ;;
+        darwin) echo "zsh git curl wget unzip bat fzf htop fastfetch" ;;
     esac
 }
 
@@ -31,6 +34,7 @@ pkgs_dev() {
         fedora) echo "podman python3 python3-pip golang gcc gcc-c++ make cmake clang" ;;
         debian) echo "podman python3 python3-pip golang-go gcc g++ make cmake clang" ;;
         arch)   echo "podman python python-pip go gcc make cmake clang" ;;
+        darwin) echo "python3 go gcc make cmake llvm" ;;
     esac
 }
 
@@ -42,12 +46,14 @@ pkgs_java_candidates() {
         fedora) echo "java-21-openjdk java-latest-openjdk java-17-openjdk" ;;
         debian) echo "openjdk-21-jdk openjdk-17-jdk default-jdk" ;;
         arch)   echo "jdk21-openjdk jdk17-openjdk jdk-openjdk" ;;
+        darwin) echo "openjdk@21 openjdk@17 openjdk" ;;
     esac
 }
 
 # ─── Codecs / multimedia ──────────────────────────────────────────────────────
 # On Fedora, requires RPM Fusion (handled in repos section).
 # Ubuntu ships codecs in universe/multiverse; Arch ships in extra.
+# macOS: VLC and ffmpeg cover playback and transcoding.
 
 pkgs_codecs() {
     case "$DISTRO_FAMILY" in
@@ -62,6 +68,9 @@ pkgs_codecs() {
         arch)
             echo "vlc ffmpeg gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
             ;;
+        darwin)
+            echo "vlc ffmpeg"
+            ;;
     esac
 }
 
@@ -72,6 +81,7 @@ pkgs_gaming() {
         fedora) echo "gamemode mangohud lutris goverlay" ;;
         debian) echo "gamemode mangohud lutris goverlay" ;;
         arch)   echo "gamemode mangohud lutris goverlay" ;;
+        darwin) : ;;  # Linux gaming stack not available on macOS
     esac
 }
 
@@ -82,14 +92,17 @@ pkgs_steam() {
         fedora) echo "steam" ;;       # from RPM Fusion
         debian) echo "steam-installer" ;;
         arch)   echo "steam" ;;       # multilib repo must be enabled
+        darwin) echo "steam" ;;       # Homebrew cask
     esac
 }
 
 # ─── Icon themes (universal) ─────────────────────────────────────────────────
 
 pkgs_themes() {
-    # papirus works under any DE; the apply-step is DE-specific (not done here)
-    echo "papirus-icon-theme"
+    case "$DISTRO_FAMILY" in
+        darwin) : ;;  # papirus is Linux-only
+        *) echo "papirus-icon-theme" ;;
+    esac
 }
 
 # ─── GNOME-only: tweaks + shell extensions ────────────────────────────────────
@@ -99,6 +112,7 @@ pkgs_gnome_only() {
         fedora) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
         debian) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
         arch)   echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
+        darwin) : ;;  # no GNOME on macOS
     esac
 }
 
@@ -109,6 +123,7 @@ pkgs_qt() {
         fedora) echo "qt5ct qt6ct" ;;
         debian) echo "qt5ct qt6ct" ;;
         arch)   echo "qt5ct qt6ct" ;;
+        darwin) : ;;  # Qt theming is handled differently on macOS
     esac
 }
 
@@ -119,6 +134,7 @@ pkgs_fonts_arabic() {
         fedora) echo "google-noto-sans-arabic-fonts google-noto-naskh-arabic-fonts amiri-fonts" ;;
         debian) echo "fonts-noto fonts-noto-core fonts-hosny-amiri" ;;
         arch)   echo "noto-fonts ttf-amiri" ;;
+        darwin) echo "font-noto-sans-arabic" ;;  # from homebrew/cask-fonts tap
     esac
 }
 
@@ -129,18 +145,7 @@ pkgs_bluetooth() {
         fedora) echo "bluez" ;;
         debian) echo "bluez" ;;
         arch)   echo "bluez bluez-utils" ;;
-    esac
-}
-
-# ─── Apps (Chrome, LibreOffice) ──────────────────────────────────────────────
-# VS Code, Chrome, ProtonVPN are installed via their own vendor repos, handled
-# in the repos section. LibreOffice and others come from distro repos.
-
-pkgs_libreoffice() {
-    case "$DISTRO_FAMILY" in
-        fedora) echo "libreoffice" ;;
-        debian) echo "libreoffice" ;;
-        arch)   echo "libreoffice-fresh" ;;
+        darwin) : ;;  # Bluetooth is built-in on macOS, no package needed
     esac
 }
 
@@ -151,6 +156,7 @@ pkgs_bloat() {
         fedora) echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
         debian) echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
         arch)   echo "gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan" ;;
+        darwin) : ;;  # nothing to debloat on macOS via package manager
     esac
 }
 
@@ -161,6 +167,7 @@ pkgs_ghostty_build_deps() {
         fedora) echo "gtk4-devel gtk4-layer-shell-devel libadwaita-devel gettext" ;;
         debian) echo "libgtk-4-dev libgtk4-layer-shell-dev libadwaita-1-dev gettext" ;;
         arch)   echo "gtk4 gtk4-layer-shell libadwaita gettext" ;;
+        darwin) : ;;  # macOS uses brew cask ghostty instead of building from source
     esac
 }
 
@@ -171,6 +178,7 @@ pkgs_virt() {
         fedora) echo "qemu-kvm libvirt virt-manager virt-install bridge-utils edk2-ovmf swtpm" ;;
         debian) echo "qemu-kvm libvirt-daemon-system virt-manager virtinst bridge-utils ovmf swtpm" ;;
         arch)   echo "qemu-full libvirt virt-manager bridge-utils edk2-ovmf swtpm dnsmasq" ;;
+        darwin) : ;;  # KVM/QEMU is Linux-only; use UTM or Parallels on macOS
     esac
 }
 
@@ -181,6 +189,7 @@ pkgs_snapper() {
         fedora) echo "snapper python3-dnf-plugins-extras-snapper btrfs-assistant" ;;
         debian) echo "snapper btrfs-assistant" ;;
         arch)   echo "snapper snap-pac btrfs-assistant" ;;
+        darwin) : ;;  # Btrfs/Snapper is Linux-only; macOS uses APFS + Time Machine
     esac
 }
 
@@ -191,13 +200,15 @@ pkgs_firewall() {
         fedora) echo "firewalld" ;;
         debian) echo "ufw" ;;
         arch)   echo "firewalld" ;;
+        darwin) : ;;  # macOS has a built-in firewall via System Settings
     esac
 }
 
 # ─── Docker engine packages (when using upstream repo) ────────────────────────
+# darwin installs Docker Desktop (a cask), handled separately in install_docker_engine.
 
 pkgs_docker_engine() {
-    # Same names across upstream Docker repos for all distros
+    # Same names across upstream Docker repos for all Linux distros
     echo "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
 }
 
@@ -215,6 +226,7 @@ pkgs_docker_conflicts() {
         arch)
             echo "docker"
             ;;
+        darwin) : ;;  # no conflicts to remove on macOS
     esac
 }
 
@@ -225,6 +237,6 @@ pkgs_ms_fonts() {
     case "$DISTRO_FAMILY" in
         debian) echo "ttf-mscorefonts-installer" ;;   # universe/multiverse
         arch)   echo "ttf-ms-fonts" ;;                # AUR
-        # fedora handled separately (RPM download)
+        # fedora and darwin handled separately
     esac
 }

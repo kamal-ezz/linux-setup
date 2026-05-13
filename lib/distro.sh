@@ -2,23 +2,66 @@
 # Distro detection + package-manager abstractions.
 #
 # Sets globals on detection:
-#   DISTRO   — fedora | ubuntu | debian | arch
-#   DISTRO_FAMILY — fedora | debian | arch (groups Ubuntu under Debian)
-#   PKG_MGR  — dnf | apt | pacman
+#   DISTRO   — fedora | ubuntu | debian | arch | macos
+#   DISTRO_FAMILY — fedora | debian | arch | darwin
+#   PKG_MGR  — dnf | apt | pacman | brew
 #
 # Public helpers (call after detect_distro):
-#   pkg_install <pkgs...>     — install, skip already-installed
-#   pkg_install_one <pkgs...> — install first available from candidates
-#   pkg_remove <pkgs...>      — remove if installed
-#   pkg_installed <pkg>       — is installed?
-#   pkg_available <pkg>       — exists in enabled repos?
-#   pkg_swap <from> <to>      — replace package (Fedora-only meaningfully)
-#   pm_upgrade                — full system upgrade
-#   add_repo <name> <args...> — distro-specific; see per-pm helpers below
-#   install_local_pkg <file>  — install a downloaded .rpm/.deb/.pkg.tar.zst
-#   bootstrap_aur             — install yay if missing (arch only)
+#   is_linux / is_macos             — OS guards
+#   require_linux <label>           — exit 1 with clear message if on macOS
+#   pkg_install <pkgs...>           — install, skip already-installed
+#   pkg_install_one <pkgs...>       — install first available from candidates
+#   pkg_remove <pkgs...>            — remove if installed
+#   pkg_installed <pkg>             — is installed?
+#   pkg_available <pkg>             — exists in enabled repos?
+#   pkg_swap <from> <to>            — replace package (Fedora-only meaningfully)
+#   pm_upgrade                      — full system upgrade
+#   add_repo <name> <args...>       — distro-specific; see per-pm helpers below
+#   install_local_pkg <file>        — install a downloaded .rpm/.deb/.pkg.tar.zst/.pkg
+#   bootstrap_aur                   — install yay if missing (arch only)
+#   bootstrap_homebrew              — install Homebrew if missing (macOS only)
+
+# ─── OS guards ────────────────────────────────────────────────────────────────
+
+is_linux() { [[ "$(uname -s)" == "Linux" ]]; }
+is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+
+# Fail loudly if this code is running on macOS. Use at the top of any function
+# that calls Linux-only tools (systemctl, grubby, /sys paths, etc.).
+require_linux() {
+    if is_linux; then
+        return 0
+    fi
+    log_error "${1:-This operation} is Linux-only and cannot run on macOS"
+    return 1
+}
+
+# ─── Homebrew bootstrap ───────────────────────────────────────────────────────
+
+bootstrap_homebrew() {
+    if cmd_exists brew; then
+        return 0
+    fi
+    log_info "Installing Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add Homebrew to PATH for the remainder of this script invocation
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+}
 
 detect_distro() {
+    # macOS: check uname before sourcing /etc/os-release (which doesn't exist there)
+    if is_macos; then
+        DISTRO=macos
+        DISTRO_FAMILY=darwin
+        PKG_MGR=brew
+        export DISTRO DISTRO_FAMILY PKG_MGR
+        return
+    fi
+
     if ! source /etc/os-release 2>/dev/null; then
         log_error "Cannot read /etc/os-release; unsupported system"
         exit 1
@@ -53,7 +96,7 @@ detect_distro() {
                 *arch*) DISTRO=arch; DISTRO_FAMILY=arch; PKG_MGR=pacman ;;
                 *)
                     log_error "Unsupported distro: ID=${ID:-unknown} ID_LIKE=${ID_LIKE:-}"
-                    log_error "Supported: Fedora, Ubuntu, Debian, Arch"
+                    log_error "Supported: Fedora, Ubuntu, Debian, Arch, macOS"
                     exit 1
                     ;;
             esac
@@ -70,6 +113,7 @@ pkg_installed() {
         dnf)    rpm -q "$1" &>/dev/null || rpm -q --whatprovides "$1" &>/dev/null ;;
         apt)    dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;;
         pacman) pacman -Qi "$1" &>/dev/null ;;
+        brew)   brew list "$1" &>/dev/null ;;
     esac
 }
 
@@ -88,10 +132,17 @@ pkg_available() {
             # No yay yet → assume AUR; install path will resolve it.
             return 0
             ;;
+        brew)   brew info "$1" &>/dev/null ;;
     esac
 }
 
 # ─── pkg_install ──────────────────────────────────────────────────────────────
+
+# On macOS, check whether a package is a cask (GUI app) vs a formula (CLI tool)
+# so we can pass the right flag to brew.
+_brew_is_cask() {
+    brew info --cask "$1" &>/dev/null
+}
 
 pkg_install() {
     local to_install=()
@@ -126,6 +177,15 @@ pkg_install() {
                 log_warn "Package install failed, continuing: ${to_install[*]}"
                 return 0
             }
+            ;;
+        brew)
+            for pkg in "${to_install[@]}"; do
+                if _brew_is_cask "$pkg"; then
+                    brew install --cask "$pkg" || log_warn "Cask install failed: $pkg"
+                else
+                    brew install "$pkg" || log_warn "Formula install failed: $pkg"
+                fi
+            done
             ;;
     esac
 }
@@ -162,6 +222,13 @@ pkg_remove() {
         dnf)    sudo dnf remove -y "${to_remove[@]}" || true ;;
         apt)    sudo apt-get remove -y "${to_remove[@]}" || true ;;
         pacman) sudo pacman -Rns --noconfirm "${to_remove[@]}" || true ;;
+        brew)
+            for pkg in "${to_remove[@]}"; do
+                brew uninstall "$pkg" 2>/dev/null \
+                    || brew uninstall --cask "$pkg" 2>/dev/null \
+                    || true
+            done
+            ;;
     esac
 }
 
@@ -173,7 +240,7 @@ pkg_swap() {
         dnf)
             sudo dnf swap -y "$from" "$to" --allowerasing || true
             ;;
-        apt|pacman)
+        apt|pacman|brew)
             pkg_install "$to"
             pkg_remove "$from"
             ;;
@@ -194,6 +261,9 @@ pm_upgrade() {
         pacman)
             sudo pacman -Syu --noconfirm || log_warn "System upgrade had issues"
             ;;
+        brew)
+            brew update && brew upgrade || log_warn "Homebrew upgrade had issues"
+            ;;
     esac
 }
 
@@ -205,6 +275,7 @@ install_local_pkg() {
         dnf)    dnf_run_optional install -y "$file" ;;
         apt)    sudo apt-get install -y "$file" ;;
         pacman) sudo pacman -U --noconfirm "$file" ;;
+        brew)   sudo installer -pkg "$file" -target / ;;
     esac
 }
 
@@ -229,6 +300,7 @@ add_apt_repo() {
 # ─── AUR support (Arch) ───────────────────────────────────────────────────────
 
 bootstrap_aur() {
+    is_linux || return 0
     [[ "$PKG_MGR" != "pacman" ]] && return 0
     if cmd_exists yay; then
         return 0
@@ -283,8 +355,14 @@ require_distro() {
 
 # ─── desktop environment detection ────────────────────────────────────────────
 
-# Sets DESKTOP_ENV to one of: gnome, kde, xfce, cinnamon, mate, lxqt, other, none
+# Sets DESKTOP_ENV to one of: gnome, kde, xfce, cinnamon, mate, lxqt, aqua, other, none
 detect_desktop() {
+    if is_macos; then
+        DESKTOP_ENV=aqua
+        export DESKTOP_ENV
+        return
+    fi
+
     local raw="${XDG_CURRENT_DESKTOP:-}${DESKTOP_SESSION:-}"
     raw="${raw,,}"   # lowercase
 

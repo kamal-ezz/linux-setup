@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux post-install setup script (Fedora, Ubuntu/Debian, Arch)
+# Post-install setup script (Fedora, Ubuntu/Debian, Arch, macOS)
 # Run as your regular user (not root), from a desktop session.
 #
 # Tested on: Fedora.
@@ -207,6 +207,15 @@ configure_dnf() {
     log_section "Section 2: Package Manager Configuration"
 
     case "$PKG_MGR" in
+        brew)
+            bootstrap_homebrew
+            if brew analytics state 2>/dev/null | grep -q "disabled"; then
+                log_warn "Homebrew analytics already disabled"
+            else
+                brew analytics off
+                log_info "Homebrew analytics disabled"
+            fi
+            ;;
         dnf)
             local DNF_CONF="/etc/dnf/dnf.conf"
             local SETTINGS=(
@@ -404,6 +413,12 @@ enable_repos_arch() {
     log_info "AUR helper bootstrapped (Chrome/VS Code/Wine/ProtonVPN come from AUR)"
 }
 
+enable_repos_darwin() {
+    # homebrew/cask-fonts was folded into homebrew/cask in 2024 — no taps needed
+    # for font casks anymore. Left as a hook for any future taps.
+    log_info "No extra Homebrew taps required (cask-fonts merged into homebrew/cask)"
+}
+
 enable_repos() {
     log_section "Section 3: Enable Repositories"
 
@@ -411,6 +426,7 @@ enable_repos() {
         fedora) enable_repos_fedora ;;
         debian) enable_repos_debian ;;
         arch)   enable_repos_arch ;;
+        darwin) enable_repos_darwin ;;
     esac
 
     summary_ok "Repositories"
@@ -439,6 +455,18 @@ system_upgrade() {
 # ─── Section 5: Package Installation ─────────────────────────────────────────
 
 install_docker_engine() {
+    # macOS: use Docker Desktop (cask); no daemon management or conflict removal needed.
+    if is_macos; then
+        if brew list --cask docker &>/dev/null; then
+            log_warn "Docker Desktop already installed"
+        else
+            log_info "Installing Docker Desktop..."
+            brew install --cask docker
+            log_warn "Launch Docker Desktop from Applications to start the daemon"
+        fi
+        return
+    fi
+
     # Remove conflicting unofficial/distro Docker packages before installing
     # Docker Engine from the upstream repo. Package list differs per distro.
     local conflicts
@@ -462,6 +490,7 @@ install_chrome() {
         fedora) pkg_install google-chrome-stable ;;
         debian) pkg_install google-chrome-stable ;;
         arch)   pkg_install google-chrome ;;   # AUR
+        darwin) pkg_install google-chrome ;;   # Homebrew cask
     esac
 }
 
@@ -470,6 +499,7 @@ install_protonvpn() {
         fedora) pkg_install proton-vpn-gnome-desktop ;;
         debian) pkg_install proton-vpn-gnome-desktop ;;
         arch)   pkg_install proton-vpn-gtk-app ;;   # AUR
+        darwin) pkg_install protonvpn ;;            # Homebrew cask
     esac
 }
 
@@ -478,6 +508,7 @@ install_vscode() {
         fedora) pkg_install code ;;
         debian) pkg_install code ;;
         arch)   pkg_install visual-studio-code-bin ;;   # AUR
+        darwin) pkg_install visual-studio-code ;;       # Homebrew cask
     esac
 }
 
@@ -494,6 +525,7 @@ install_gh_cli() {
             ;;
         debian) pkg_install gh ;;
         arch)   pkg_install github-cli ;;
+        darwin) pkg_install gh ;;
     esac
 }
 
@@ -512,6 +544,9 @@ install_wine() {
             ;;
         arch)
             pkg_install wine wine-mono wine-gecko
+            ;;
+        darwin)
+            log_warn "WineHQ is not supported on macOS. Use CrossOver (https://www.codeweavers.com/crossover/) as an alternative."
             ;;
     esac
 }
@@ -542,7 +577,6 @@ install_packages() {
                 $(pkgs_dev) \
                 $(pkgs_codecs) \
                 $(pkgs_gaming) \
-                $(pkgs_libreoffice) \
                 $(pkgs_steam) \
                 $(pkgs_themes) \
                 $(pkgs_qt) \
@@ -559,6 +593,11 @@ install_packages() {
     install_protonvpn
     install_gh_cli
     install_wine
+
+    # macOS-only desktop apps: Claude and Codex.
+    if is_macos; then
+        pkg_install claude codex-app
+    fi
 
     # Fedora-only: swap ffmpeg-free → full ffmpeg + AMD VA-API freeworld drivers
     # (these come from RPM Fusion; no direct equivalent on Ubuntu/Arch — those
@@ -604,6 +643,11 @@ install_ms_fonts() {
     log_section "Section 6: Microsoft Fonts"
 
     case "$DISTRO_FAMILY" in
+        darwin)
+            log_warn "Microsoft Core Fonts are not packaged for Homebrew. Install manually if needed."
+            summary_skip "Microsoft fonts (not available on macOS)"
+            return
+            ;;
         fedora)
             if rpm -q msttcore-fonts-installer &>/dev/null; then
                 log_warn "Microsoft fonts already installed, skipping"
@@ -640,37 +684,49 @@ install_extra_tools() {
 
     mkdir -p "$HOME/.local/bin"
 
-    # yt-dlp
+    # yt-dlp — brew on macOS (official recommendation), prebuilt binary on Linux
     if cmd_exists yt-dlp; then
         log_warn "yt-dlp already installed"
         summary_skip "yt-dlp (already installed)"
     else
         log_info "Installing yt-dlp..."
-        curl -fLo "$HOME/.local/bin/yt-dlp" \
-            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
-        chmod +x "$HOME/.local/bin/yt-dlp"
+        if is_macos; then
+            brew install yt-dlp
+        else
+            curl -fLo "$HOME/.local/bin/yt-dlp" \
+                https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+            chmod +x "$HOME/.local/bin/yt-dlp"
+        fi
         summary_ok "yt-dlp"
     fi
 
-    # Neovim (tarball → /opt/nvim)
+    # Neovim
     if cmd_exists nvim; then
         log_warn "Neovim already installed"
         summary_skip "Neovim (already installed)"
     else
         log_info "Installing Neovim..."
-        local NVIM_TMP="/tmp/nvim-linux-x86_64.tar.gz"
-        curl -fLo "$NVIM_TMP" \
-            https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
-        sudo tar -C /opt -xzf "$NVIM_TMP"
-        sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
-        rm -f "$NVIM_TMP"
+        if is_macos; then
+            brew install neovim
+        else
+            local NVIM_TMP="/tmp/nvim-linux-x86_64.tar.gz"
+            curl -fLo "$NVIM_TMP" \
+                https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
+            sudo tar -C /opt -xzf "$NVIM_TMP"
+            sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
+            rm -f "$NVIM_TMP"
+        fi
         summary_ok "Neovim"
     fi
 
-    # opencode — official install script per https://opencode.ai/docs/
+    # opencode — anomalyco tap on macOS (per opencode.ai/docs, fresher than the
+    # core Homebrew formula), official install script on Linux.
     if cmd_exists opencode; then
         log_warn "opencode already installed"
         summary_skip "opencode (already installed)"
+    elif is_macos; then
+        log_info "Installing opencode from anomalyco/tap..."
+        brew install anomalyco/tap/opencode && summary_ok "opencode" || summary_fail "opencode"
     else
         log_info "Installing opencode via the official install script..."
         local OC_SCRIPT="/tmp/opencode-install.sh"
@@ -684,7 +740,10 @@ install_extra_tools() {
     fi
 
     # opencode Desktop — package from GitHub releases (anomalyco/opencode)
-    if pkg_installed opencode || pkg_installed opencode-desktop; then
+    if is_macos; then
+        log_warn "opencode Desktop: download the macOS DMG manually from https://github.com/anomalyco/opencode/releases"
+        summary_skip "opencode Desktop (manual install on macOS)"
+    elif pkg_installed opencode || pkg_installed opencode-desktop; then
         log_warn "opencode Desktop already installed"
         summary_skip "opencode Desktop (already installed)"
     else
@@ -740,6 +799,14 @@ install_ghostty() {
         return
     fi
 
+    # macOS: install the official pre-built cask; no source build needed.
+    if is_macos; then
+        log_info "Installing Ghostty via Homebrew cask..."
+        brew install --cask ghostty
+        summary_ok "Ghostty (installed via Homebrew)"
+        return
+    fi
+
     # Build dependencies
     pkg_install $(pkgs_ghostty_build_deps)
 
@@ -791,6 +858,12 @@ install_ghostty() {
 
 setup_flatpak() {
     log_section "Section 9: Flatpak + Flathub"
+
+    if is_macos; then
+        log_warn "Flatpak is not available on macOS — skipping (use brew casks for GUI apps)"
+        summary_skip "Flatpak (not available on macOS)"
+        return
+    fi
 
     case "$DISTRO_FAMILY" in
         fedora) pkg_install flatpak gnome-software-plugin-flatpak ;;
@@ -1069,10 +1142,12 @@ fix_steam_shortcuts() {
     "$script" || log_warn "fix-steam-shortcuts exited non-zero"
 
     # Enable the path watcher so future Steam shortcuts get fixed automatically
-    if systemctl --user enable --now fix-steam-shortcuts.path 2>/dev/null; then
-        log_info "Enabled fix-steam-shortcuts.path (auto-fixes new Steam shortcuts)"
-    else
-        log_warn "Could not enable fix-steam-shortcuts.path (no user session?)"
+    if is_linux; then
+        if systemctl --user enable --now fix-steam-shortcuts.path 2>/dev/null; then
+            log_info "Enabled fix-steam-shortcuts.path (auto-fixes new Steam shortcuts)"
+        else
+            log_warn "Could not enable fix-steam-shortcuts.path (no user session?)"
+        fi
     fi
 
     summary_ok "Steam shortcuts (applied + path watcher enabled)"
@@ -1229,7 +1304,12 @@ install_asus_tools() {
 install_fonts() {
     log_section "Section 12: Fonts (MesloLGS NF)"
 
-    local FONT_DIR="$HOME/.local/share/fonts"
+    local FONT_DIR
+    if is_macos; then
+        FONT_DIR="$HOME/Library/Fonts"
+    else
+        FONT_DIR="$HOME/.local/share/fonts"
+    fi
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
 
     if [[ -f "$FONT_CHECK" ]]; then
@@ -1252,7 +1332,9 @@ install_fonts() {
         curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
     done
 
-    fc-cache -fv "$FONT_DIR"
+    if is_linux; then
+        fc-cache -fv "$FONT_DIR"
+    fi
     summary_ok "MesloLGS NF fonts"
 }
 
@@ -1307,11 +1389,15 @@ install_shell_extras() {
 install_node() {
     log_section "Section 13: fnm + Node.js LTS"
 
-    local FNM_BIN="$HOME/.local/bin/fnm"
+    # fnm — Homebrew on macOS (the upstream install script is deprecated there),
+    # the official curl installer on Linux.
     mkdir -p "$HOME/.local/bin"
 
-    if [[ -x "$FNM_BIN" ]]; then
+    if cmd_exists fnm; then
         log_warn "fnm already installed"
+    elif is_macos; then
+        log_info "Installing fnm via Homebrew..."
+        brew install fnm
     else
         log_info "Installing fnm..."
         local FNM_SCRIPT="/tmp/fnm-install.sh"
@@ -1320,8 +1406,11 @@ install_node() {
         rm -f "$FNM_SCRIPT"
     fi
 
+    local FNM_BIN
+    FNM_BIN="$(command -v fnm || echo "$HOME/.local/bin/fnm")"
+
     if [[ ! -x "$FNM_BIN" ]]; then
-        log_warn "fnm binary not found at $FNM_BIN after install — skipping Node.js setup"
+        log_warn "fnm binary not found after install — skipping Node.js setup"
         summary_fail "fnm + Node.js"
         return 0
     fi
@@ -1385,8 +1474,13 @@ setup_ssh() {
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
     ssh-keygen -t ed25519 -C "$EMAIL" -f "$SSH_KEY" -N ""
-    eval "$(ssh-agent -s)"
-    ssh-add "$SSH_KEY"
+    if is_macos; then
+        # macOS Keychain stores the passphrase so you don't need ssh-agent manually
+        ssh-add --apple-use-keychain "$SSH_KEY"
+    else
+        eval "$(ssh-agent -s)"
+        ssh-add "$SSH_KEY"
+    fi
     ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
     echo ""
@@ -1404,6 +1498,14 @@ setup_ssh() {
 
 setup_services() {
     log_section "Section 15: Services (Docker, Bluetooth, Firewall)"
+
+    if is_macos; then
+        log_info "macOS: Docker Desktop manages its own daemon (launch from Applications)."
+        log_info "macOS: Bluetooth is always active — no daemon to manage."
+        log_info "macOS: Configure firewall via System Settings → Network → Firewall."
+        summary_ok "Services (macOS: managed by OS)"
+        return
+    fi
 
     # Docker (containerd is bundled on Arch; separate service on Fedora/Debian)
     log_info "Enabling Docker service..."
@@ -1518,9 +1620,11 @@ setup_security() {
         log_warn "update-crypto-policies not available on this distro — skipping crypto policy"
     fi
 
-    # DNS over TLS via systemd-resolved is opt-in to avoid network breakage.
+    # DNS over TLS via systemd-resolved is opt-in and Linux-only.
     local DNS_CONF="/etc/systemd/resolved.conf.d/99-dns-over-tls.conf"
-    if [[ "${ENABLE_DNS_OVER_TLS:-0}" == "1" ]]; then
+    if ! is_linux; then
+        log_warn "DNS over TLS via systemd-resolved is Linux-only — skipping on macOS"
+    elif [[ "${ENABLE_DNS_OVER_TLS:-0}" == "1" ]]; then
         if [[ -f "$DNS_CONF" ]]; then
             log_warn "DNS over TLS already configured"
         else
@@ -1571,6 +1675,12 @@ EOF
 setup_virtualization() {
     log_section "Section 17: Virtualization"
 
+    if is_macos; then
+        log_warn "KVM/QEMU is Linux-only. On macOS, use UTM (https://mac.getutm.app/) or Parallels Desktop."
+        summary_skip "Virtualization (Linux-only; use UTM or Parallels on macOS)"
+        return
+    fi
+
     # On Fedora, the "Virtualization" group is the canonical install path; on
     # other distros use the package list directly.
     if [[ "$DISTRO_FAMILY" == "fedora" ]]; then
@@ -1605,6 +1715,12 @@ setup_virtualization() {
 
 setup_snapper() {
     log_section "Section 18: Snapper (Btrfs Snapshots)"
+
+    if is_macos; then
+        log_warn "Btrfs/Snapper is Linux-only. macOS uses APFS with Time Machine for snapshots."
+        summary_skip "Snapper (Linux-only)"
+        return
+    fi
 
     if ! findmnt -n -o FSTYPE / 2>/dev/null | grep -q btrfs; then
         log_warn "Root filesystem is not Btrfs — skipping Snapper setup."
@@ -1691,7 +1807,12 @@ setup_vscode() {
         code --install-extension "$ext" --force
     done
 
-    local VSCODE_SETTINGS="$HOME/.config/Code/User/settings.json"
+    local VSCODE_SETTINGS
+    if is_macos; then
+        VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
+    else
+        VSCODE_SETTINGS="$HOME/.config/Code/User/settings.json"
+    fi
     if [[ -f "$VSCODE_SETTINGS" ]]; then
         log_warn "VS Code settings.json already exists, skipping"
         summary_skip "VS Code settings (already exists)"
@@ -1769,6 +1890,8 @@ configure_gnome() {
 
     # Keyboard layouts
     gsettings set org.gnome.desktop.input-sources sources   "[('xkb', 'us'), ('xkb', 'ara')]"
+    gsettings set org.gnome.desktop.wm.keybindings switch-input-source          "['<Shift>Tab']"
+    gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward "['<Primary><Shift>Tab']"
 
     # Touchpad
     gsettings set org.gnome.desktop.peripherals.touchpad click-method   'areas'
@@ -2028,17 +2151,29 @@ setup_dotfiles() {
         ".pi/agent/extensions/diff.ts"
         ".pi/agent/extensions/effort.ts"
         ".pi/agent/extensions/plan-mode.ts"
-        ".local/bin/fix-steam-shortcuts"
-        ".config/systemd/user/fix-steam-shortcuts.service"
-        ".config/systemd/user/fix-steam-shortcuts.path"
-        ".local/bin/zen-update"
-        ".config/systemd/user/zen-browser-update.service"
-        ".config/systemd/user/zen-browser-update.timer"
     )
 
+    # Linux-only: systemd user units and Steam shortcut fixer
+    if is_linux; then
+        FILES+=(
+            ".local/bin/fix-steam-shortcuts"
+            ".config/systemd/user/fix-steam-shortcuts.service"
+            ".config/systemd/user/fix-steam-shortcuts.path"
+        )
+    fi
+
     for file in "${FILES[@]}"; do
-        local target="$HOME/$file"
         local source="$DOTFILES_DIR/$file"
+        local target="$HOME/$file"
+
+        # macOS path remapping: a few apps don't honour ~/.config by default.
+        if is_macos; then
+            case "$file" in
+                .config/ghostty/config)
+                    target="$HOME/Library/Application Support/com.mitchellh.ghostty/config"
+                    ;;
+            esac
+        fi
 
         if [[ ! -f "$source" ]]; then
             log_warn "Not found in dotfiles: $file — skipping"
@@ -2097,6 +2232,11 @@ print_summary() {
 
 reboot_prompt() {
     echo ""
+    if is_macos; then
+        log_info "Setup complete. Log out and back in for shell changes (default shell) to take effect."
+        return
+    fi
+
     log_warn "The following require a reboot to take effect:"
     log_warn "  • NVIDIA akmod kernel module build"
     log_warn "  • nvidia-drm.modeset=1 kernel argument"
@@ -2122,7 +2262,7 @@ main() {
     exec > >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
 
-    log_info "Linux setup started at $(date)"
+    log_info "Setup started at $(date)"
     echo ""
 
     preflight_checks
