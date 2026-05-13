@@ -1890,8 +1890,6 @@ configure_gnome() {
 
     # Keyboard layouts
     gsettings set org.gnome.desktop.input-sources sources   "[('xkb', 'us'), ('xkb', 'ara')]"
-    gsettings set org.gnome.desktop.wm.keybindings switch-input-source          "['<Shift>Tab']"
-    gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward "['<Primary><Shift>Tab']"
 
     # Touchpad
     gsettings set org.gnome.desktop.peripherals.touchpad click-method   'areas'

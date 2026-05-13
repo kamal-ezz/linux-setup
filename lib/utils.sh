@@ -13,11 +13,15 @@ user_in_group() {
 }
 
 has_nvidia_hardware() {
+    # macOS has not supported NVIDIA GPUs since 2019.
+    is_linux || return 1
     # NVIDIA PCI vendor ID is 0x10de. Checking /sys avoids depending on lspci.
     grep -qi '^0x10de$' /sys/bus/pci/devices/*/vendor 2>/dev/null
 }
 
 has_asus_hardware() {
+    # /sys/class/dmi/ is Linux-specific; always false on macOS.
+    is_linux || return 1
     local vendor product board
     vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
     product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"

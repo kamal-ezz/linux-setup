@@ -77,20 +77,25 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # Custom plugins may be added to $ZSH_CUSTOM/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(
+_zsh_plugins=(
   git
   sudo
   z
   extract
   colored-man-pages
   command-not-found
-  dnf
-  systemd
   fzf
   zsh-autosuggestions
   zsh-completions
   zsh-syntax-highlighting
 )
+if [[ "$(uname -s)" == "Linux" ]]; then
+  _zsh_plugins+=(dnf systemd)
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  _zsh_plugins+=(macos)
+fi
+plugins=("${_zsh_plugins[@]}")
+unset _zsh_plugins
 
 # zsh-completions: add to fpath before oh-my-zsh runs compinit
 fpath+=${ZSH_CUSTOM:-${ZSH:-$HOME/.oh-my-zsh}/custom}/plugins/zsh-completions/src
@@ -130,4 +135,24 @@ source $ZSH/oh-my-zsh.sh
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 export PATH="$HOME/.local/bin:$HOME/.zvm/bin:$HOME/.zvm/self:$PATH"
+
+# Homebrew (macOS)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+fi
+
 eval "$(fnm env --use-on-cd --shell zsh)"
+
+# bun completions
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# opencode
+export PATH="$HOME/.opencode/bin:$PATH"
