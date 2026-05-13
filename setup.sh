@@ -45,6 +45,8 @@ list_sections() {
     echo "  extra-tools  yt-dlp, Neovim, opencode, opencode Desktop"
     echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
+    echo "  zen          Zen Browser (RPM build from source, Fedora only)"
+    echo "  steam-shortcuts  Fix Steam game shortcuts (add StartupWMClass for dock icons)"
     echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
     echo "  asus         asusctl/supergfxctl (auto-skips if not ASUS hardware)"
     echo "  fonts        MesloLGS NF fonts"
@@ -96,6 +98,10 @@ parse_args() {
 
 should_run() {
     local section="$1"
+    # Hidden/manual section: only runs when explicitly requested with --only.
+    if [[ "$section" == "steam-components" && ${#ONLY_SECTIONS[@]} -eq 0 ]]; then
+        return 1
+    fi
     if [[ ${#ONLY_SECTIONS[@]} -gt 0 ]]; then
         for s in "${ONLY_SECTIONS[@]}"; do
             [[ "$s" == "$section" ]] && return 0
@@ -111,7 +117,7 @@ should_run() {
 # Sections that require internet access (downloads, dnf, git clone, flatpak…).
 # Anything not listed runs offline (git config, gnome settings, dotfiles, etc.).
 NETWORK_SECTIONS=(
-    repos upgrade packages ms-fonts extra-tools ghostty flatpak
+    repos upgrade packages ms-fonts extra-tools ghostty flatpak zen steam-components
     nvidia asus fonts shell node ssh vscode rice virt snapper
 )
 
@@ -824,7 +830,255 @@ setup_flatpak() {
     fi
 }
 
-# ─── Section 10: NVIDIA Drivers ───────────────────────────────────────────────
+# ─── Section 10: Zen Browser (RPM build) ─────────────────────────────────────
+
+install_zen() {
+    log_section "Section 10: Zen Browser"
+
+    if [[ "$DISTRO" != "fedora" ]]; then
+        log_warn "Zen RPM build is Fedora-only; skipping on $DISTRO"
+        summary_skip "Zen Browser (unsupported distro)"
+        return 0
+    fi
+
+    if ! cmd_exists curl || ! cmd_exists rpmbuild; then
+        pkg_install curl rpm-build
+    fi
+
+    local repo="zen-browser/desktop"
+    local package="zen-browser"
+    local install_prefix="/opt/zen-browser"
+
+    log_info "Fetching latest Zen Browser release info"
+    local api_json
+    api_json=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest") \
+        || { log_warn "Failed to fetch Zen release info"; summary_fail "Zen Browser"; return 1; }
+
+    local version tarball_url sha256
+    version=$(printf '%s' "$api_json" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    tarball_url=$(printf '%s' "$api_json" | grep '"browser_download_url"' \
+        | grep 'zen\.linux-x86_64\.tar\.xz"' \
+        | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
+    sha256=$(printf '%s' "$api_json" | grep -A1 'zen\.linux-x86_64\.tar\.xz"' \
+        | grep '"sha256"' | head -1 \
+        | sed 's/.*"sha256": *"\([^"]*\)".*/\1/' || true)
+
+    [[ -n "$version" ]]     || { log_warn "Could not parse Zen version"; summary_fail "Zen Browser"; return 1; }
+    [[ -n "$tarball_url" ]] || { log_warn "Could not find Zen tarball URL"; summary_fail "Zen Browser"; return 1; }
+
+    local installed_ver
+    installed_ver=$(rpm -q --queryformat '%{VERSION}' "$package" 2>/dev/null || true)
+    if [[ "$installed_ver" == "$version" ]]; then
+        log_info "Zen Browser $version already installed"
+        summary_ok "Zen Browser (already up to date)"
+        return 0
+    fi
+    [[ -n "$installed_ver" ]] && log_info "Upgrading Zen Browser: $installed_ver → $version"
+
+    local rpmbuild_root="${HOME}/rpmbuild"
+    local sources="${rpmbuild_root}/SOURCES"
+    local specs="${rpmbuild_root}/SPECS"
+    local rpms="${rpmbuild_root}/RPMS/x86_64"
+    mkdir -p "${rpmbuild_root}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+    local tarball="${sources}/zen.linux-x86_64.tar.xz"
+    local cached_ver
+    cached_ver=$(cat "${sources}/.zen_cached_version" 2>/dev/null || true)
+    if [[ "$cached_ver" != "$version" ]]; then
+        log_info "Downloading $tarball_url"
+        curl -fL# --output "$tarball" "$tarball_url"
+        if [[ -n "$sha256" ]]; then
+            log_info "Verifying checksum"
+            printf '%s  %s\n' "$sha256" "$tarball" | sha256sum --check --status \
+                || { log_warn "SHA-256 mismatch"; summary_fail "Zen Browser"; return 1; }
+        fi
+        printf '%s' "$version" > "${sources}/.zen_cached_version"
+    else
+        log_info "Tarball for $version already cached"
+    fi
+
+    cat > "${sources}/zen-browser.desktop" <<EOF
+[Desktop Entry]
+Version=1.0
+Name=Zen Browser
+GenericName=Web Browser
+Comment=Experience tranquil browsing with Zen Browser
+Exec=${install_prefix}/zen %u
+Icon=zen-browser
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;x-scheme-handler/chrome;video/webm;application/x-xpinstall;
+StartupWMClass=zen
+StartupNotify=true
+EOF
+
+    local today
+    today=$(date '+%a %b %d %Y')
+    cat > "${specs}/${package}.spec" <<EOF
+Name:           ${package}
+Version:        ${version}
+Release:        1%{?dist}
+Summary:        Zen Browser – a privacy-focused Firefox-based web browser
+
+License:        MPL-2.0
+URL:            https://zen-browser.app
+Source0:        zen.linux-x86_64.tar.xz
+Source1:        zen-browser.desktop
+
+ExclusiveArch:  x86_64
+
+%global debug_package %{nil}
+%global __arch_install_post /usr/lib/rpm/check-buildroot
+%define _build_id_links none
+%global QA_RPATHS 0x0002
+
+Requires:       gtk3
+Requires:       libX11
+Requires:       libXt
+Requires:       mesa-libGL
+
+%description
+Zen Browser is a privacy-focused, open-source web browser built on Firefox.
+
+%prep
+%setup -q -c -n %{name}-%{version}
+
+%install
+install -d %{buildroot}${install_prefix}
+cp -a zen/. %{buildroot}${install_prefix}/
+
+install -d %{buildroot}%{_bindir}
+cat > %{buildroot}%{_bindir}/zen-browser <<'WRAPPER'
+#!/bin/sh
+exec ${install_prefix}/zen "\\\$@"
+WRAPPER
+chmod 0755 %{buildroot}%{_bindir}/zen-browser
+
+install -D -m 0644 %{SOURCE1} %{buildroot}%{_datadir}/applications/zen-browser.desktop
+
+install -D -m 0644 zen/browser/chrome/icons/default/default16.png  %{buildroot}%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
+install -D -m 0644 zen/browser/chrome/icons/default/default32.png  %{buildroot}%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
+install -D -m 0644 zen/browser/chrome/icons/default/default48.png  %{buildroot}%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
+install -D -m 0644 zen/browser/chrome/icons/default/default64.png  %{buildroot}%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
+install -D -m 0644 zen/browser/chrome/icons/default/default128.png %{buildroot}%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
+
+%post
+/bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
+update-desktop-database -q %{_datadir}/applications &>/dev/null || :
+
+%postun
+if [ \$1 -eq 0 ]; then
+    /bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
+    gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
+fi
+update-desktop-database -q %{_datadir}/applications &>/dev/null || :
+
+%posttrans
+gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
+
+%files
+%{_bindir}/zen-browser
+${install_prefix}/
+%{_datadir}/applications/zen-browser.desktop
+%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
+%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
+%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
+%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
+%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
+
+%changelog
+* ${today} Zen Browser Packager <packager@localhost> - ${version}-1
+- Automated build of Zen Browser ${version}
+EOF
+
+    log_info "Building RPM for Zen Browser $version"
+    QA_RPATHS=0x0002 rpmbuild -ba "${specs}/${package}.spec"
+
+    local rpm
+    rpm=$(ls "${rpms}/${package}-${version}-"*.rpm 2>/dev/null | head -1)
+    [[ -n "$rpm" ]] || { log_warn "RPM not found after build"; summary_fail "Zen Browser"; return 1; }
+
+    log_info "Installing $rpm"
+    sudo dnf upgrade -y "$rpm"
+
+    # Enable the weekly auto-updater (requires dotfiles to be symlinked first)
+    if [[ -f "$HOME/.local/bin/zen-update" ]]; then
+        systemctl --user enable --now zen-browser-update.timer 2>/dev/null \
+            && log_info "Enabled zen-browser-update.timer (weekly auto-updates)" \
+            || log_warn "Could not enable zen-browser-update.timer (no user session?)"
+    else
+        log_warn "zen-update script not found; run --only dotfiles first, then re-run --only zen to enable the timer"
+    fi
+
+    summary_ok "Zen Browser $version"
+}
+
+# ─── Section 11: Steam Runtime Components ────────────────────────────────────
+
+install_steam_components() {
+    log_section "Section 10: Steam Runtime Components"
+
+    if ! cmd_exists steam; then
+        log_warn "Steam is not installed; install packages first or run: bash setup.sh --only packages steam-components"
+        summary_fail "Steam runtime components (Steam missing)"
+        return 0
+    fi
+
+    if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+        log_warn "No desktop session detected; Steam component installs need the Steam GUI. Skipping."
+        summary_skip "Steam runtime components (no GUI session)"
+        return 0
+    fi
+
+    # Steam dependency/tool app IDs. Override STEAM_LINUX_RUNTIME_4_APPID if Valve changes it.
+    local components=(
+        "${STEAM_LINUX_RUNTIME_4_APPID:-3658110}|Steam Linux Runtime 4.0"
+        "1493710|Proton Experimental"
+        "228980|Steamworks Common Redistributables"
+    )
+
+    log_info "Requesting Steam to install/update required compatibility tools..."
+    log_warn "Steam may open and prompt you to sign in; downloads continue in the Steam client."
+
+    local entry appid name
+    for entry in "${components[@]}"; do
+        appid="${entry%%|*}"
+        name="${entry#*|}"
+        log_info "Queueing $name (app $appid)..."
+        nohup steam "steam://install/${appid}" >/dev/null 2>&1 &
+        sleep 3
+    done
+
+    summary_ok "Steam runtime components queued"
+}
+
+# ─── Section 10b: Steam Shortcut WMClass Fixes ───────────────────────────────
+
+fix_steam_shortcuts() {
+    log_section "Section 10b: Steam Shortcut WMClass Fixes"
+
+    local script="$HOME/.local/bin/fix-steam-shortcuts"
+    if [[ ! -x "$script" ]]; then
+        log_warn "$script not installed; run --only dotfiles first"
+        summary_skip "Steam shortcuts (script missing)"
+        return
+    fi
+
+    # Apply immediately to any existing shortcuts
+    "$script" || log_warn "fix-steam-shortcuts exited non-zero"
+
+    # Enable the path watcher so future Steam shortcuts get fixed automatically
+    if systemctl --user enable --now fix-steam-shortcuts.path 2>/dev/null; then
+        log_info "Enabled fix-steam-shortcuts.path (auto-fixes new Steam shortcuts)"
+    else
+        log_warn "Could not enable fix-steam-shortcuts.path (no user session?)"
+    fi
+
+    summary_ok "Steam shortcuts (applied + path watcher enabled)"
+}
+
+# ─── Section 11: NVIDIA Drivers ───────────────────────────────────────────────
 
 install_nvidia_fedora() {
     if pkg_installed akmod-nvidia; then
@@ -1626,12 +1880,15 @@ EOF
     gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com 2>/dev/null || \
         log_warn "AppIndicator will activate after logout/login"
 
-    # Dash-to-dock: black opaque background
+    # Dash-to-dock: appearance and multi-window behaviour
     if gsettings list-schemas | grep -qx 'org.gnome.shell.extensions.dash-to-dock'; then
         gsettings set org.gnome.shell.extensions.dash-to-dock transparency-mode 'FIXED'
         gsettings set org.gnome.shell.extensions.dash-to-dock custom-background-color true
         gsettings set org.gnome.shell.extensions.dash-to-dock background-color '#000000'
         gsettings set org.gnome.shell.extensions.dash-to-dock background-opacity 1.0
+        gsettings set org.gnome.shell.extensions.dash-to-dock click-action 'focus-or-previews'
+        gsettings set org.gnome.shell.extensions.dash-to-dock scroll-action 'cycle-windows'
+        gsettings set org.gnome.shell.extensions.dash-to-dock show-windows-preview true
     else
         log_warn "Dash-to-dock schema not available; skipping dock appearance settings"
     fi
@@ -1763,10 +2020,20 @@ setup_dotfiles() {
         ".config/ghostty/config"
         ".config/fontconfig/fonts.conf"
         ".pi/agent/settings.json"
+        ".pi/agent/keybindings.json"
         ".pi/agent/extensions/bell-notifications.ts"
+        ".pi/agent/extensions/commit.ts"
+        ".pi/agent/extensions/companion.ts"
         ".pi/agent/extensions/clipboard-rendering.ts"
         ".pi/agent/extensions/diff.ts"
         ".pi/agent/extensions/effort.ts"
+        ".pi/agent/extensions/plan-mode.ts"
+        ".local/bin/fix-steam-shortcuts"
+        ".config/systemd/user/fix-steam-shortcuts.service"
+        ".config/systemd/user/fix-steam-shortcuts.path"
+        ".local/bin/zen-update"
+        ".config/systemd/user/zen-browser-update.service"
+        ".config/systemd/user/zen-browser-update.timer"
     )
 
     for file in "${FILES[@]}"; do
@@ -1869,6 +2136,9 @@ main() {
     run_section extra-tools   install_extra_tools
     run_section ghostty       install_ghostty
     run_section flatpak       setup_flatpak
+    run_section zen           install_zen
+    run_section steam-components install_steam_components
+    run_section steam-shortcuts fix_steam_shortcuts
     run_section nvidia        install_nvidia
     run_section asus          install_asus_tools
     run_section fonts         install_fonts
