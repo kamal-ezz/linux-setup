@@ -4,6 +4,7 @@ font-thicken = true
 
 window-padding-x = 8
 window-padding-y = 8
+background = #191724
 background-opacity = 0.95
 
 gtk-titlebar = true
