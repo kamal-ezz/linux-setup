@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=kamal-tweaks
+Comment=Minimal GNOME Shell tweaks
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Adwaita
+MetacityTheme=Adwaita
+IconTheme=Papirus-Dark
+CursorTheme=catppuccin-mocha-dark-cursors

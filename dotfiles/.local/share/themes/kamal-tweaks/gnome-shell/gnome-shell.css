@@ -1,0 +1,5 @@
+/* Reduce notification panel width and increase height */
+.message-list {
+  width: 22em;
+  min-height: 18em;
+}

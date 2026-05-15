@@ -75,6 +75,13 @@ else
     log_warn "gsettings not available — skipping"
 fi
 
+KAMAL_TWEAKS_SRC="$HOME/.local/share/themes/kamal-tweaks"
+if [[ -d "$KAMAL_TWEAKS_SRC" ]]; then
+    mkdir -p "$SCRIPT_DIR/dotfiles/.local/share/themes"
+    cp -r "$KAMAL_TWEAKS_SRC" "$SCRIPT_DIR/dotfiles/.local/share/themes/"
+    log_info "kamal-tweaks theme captured."
+fi
+
 # ─── Commit & push ────────────────────────────────────────────────────────────
 
 log_section "Commit"

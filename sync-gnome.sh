@@ -89,6 +89,24 @@ gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com 2>/dev/null && \
 gnome-extensions enable user-theme@gnome-shell-extensions.gcampax.github.com 2>/dev/null && \
     log_info "user-theme enabled." || true
 
+THEME_SRC="$SCRIPT_DIR/dotfiles/.local/share/themes/kamal-tweaks"
+THEME_DEST="$HOME/.local/share/themes/kamal-tweaks"
+if [[ -d "$THEME_SRC" ]]; then
+    mkdir -p "$HOME/.local/share/themes"
+    cp -r "$THEME_SRC" "$HOME/.local/share/themes/"
+    gsettings set org.gnome.shell.extensions.user-theme name 'kamal-tweaks' 2>/dev/null || true
+    log_info "kamal-tweaks shell theme installed and applied."
+fi
+
+gnome-extensions enable just-perfection-desktop@just-perfection 2>/dev/null && \
+    log_info "just-perfection enabled." || \
+    log_warn "just-perfection: enable failed (may need logout/login)"
+gsettings set org.gnome.shell.extensions.just-perfection calendar      false 2>/dev/null || true
+gsettings set org.gnome.shell.extensions.just-perfection events-button false 2>/dev/null || true
+gsettings set org.gnome.shell.extensions.just-perfection weather       false 2>/dev/null || true
+gsettings set org.gnome.shell.extensions.just-perfection world-clock   false 2>/dev/null || true
+log_info "just-perfection: calendar, events, weather, world-clock hidden from notification panel."
+
 gnome-extensions enable blur-my-shell@aunetx 2>/dev/null && \
     log_info "blur-my-shell enabled." || \
     log_warn "blur-my-shell: enable failed (may need logout/login)"
