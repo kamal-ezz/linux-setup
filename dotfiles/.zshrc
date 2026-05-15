@@ -164,3 +164,12 @@ if [ -f '/home/kamal/.local/share/google-cloud-sdk/completion.zsh.inc' ]; then .
 # >>> grok installer >>>
 export PATH="$HOME/.grok/bin:$PATH"
 # <<< grok installer <<<
+
+# Ghostty: persist cwd across sessions
+if [[ "$TERM_PROGRAM" == "ghostty" ]]; then
+  _GHOSTTY_LAST_CWD="${XDG_CACHE_HOME:-$HOME/.cache}/ghostty-last-cwd"
+  [[ -f "$_GHOSTTY_LAST_CWD" && "$PWD" == "$HOME" ]] && cd "$(<"$_GHOSTTY_LAST_CWD")" 2>/dev/null
+  autoload -U add-zsh-hook
+  _ghostty_save_cwd() { mkdir -p "$(dirname "$_GHOSTTY_LAST_CWD")"; print -r -- "$PWD" >"$_GHOSTTY_LAST_CWD" }
+  add-zsh-hook chpwd _ghostty_save_cwd
+fi

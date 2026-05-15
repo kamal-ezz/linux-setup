@@ -109,9 +109,9 @@ pkgs_themes() {
 
 pkgs_gnome_only() {
     case "$DISTRO_FAMILY" in
-        fedora) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
-        debian) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
-        arch)   echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator" ;;
+        fedora) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator gnome-shell-extension-just-perfection gnome-shell-extension-user-theme" ;;
+        debian) echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator gnome-shell-extension-just-perfection gnome-shell-extension-user-theme" ;;
+        arch)   echo "gnome-tweaks gnome-shell-extension-dash-to-dock gnome-shell-extension-appindicator gnome-shell-extension-just-perfection gnome-shell-extension-user-theme" ;;
         darwin) : ;;  # no GNOME on macOS
     esac
 }
