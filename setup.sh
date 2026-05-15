@@ -532,6 +532,43 @@ install_gh_cli() {
     esac
 }
 
+install_appimagelauncher() {
+    case "$DISTRO_FAMILY" in
+        fedora)
+            if ! rpm -q appimagelauncher &>/dev/null; then
+                local AIL_RPM_URL
+                AIL_RPM_URL=$(curl -fsSL "https://api.github.com/repos/TheAssassin/AppImageLauncher/releases/latest" \
+                    | grep browser_download_url | grep x86_64.rpm | head -1 | cut -d'"' -f4)
+                if [[ -n "$AIL_RPM_URL" ]]; then
+                    log_info "Installing AppImageLauncher from GitHub..."
+                    dnf_run_optional install -y "$AIL_RPM_URL" || log_warn "AppImageLauncher install failed"
+                else
+                    log_warn "Could not find AppImageLauncher RPM URL — skipping"
+                fi
+            fi
+            ;;
+        debian)
+            if ! dpkg -l appimagelauncher &>/dev/null 2>&1; then
+                local AIL_DEB_URL
+                AIL_DEB_URL=$(curl -fsSL "https://api.github.com/repos/TheAssassin/AppImageLauncher/releases/latest" \
+                    | grep browser_download_url | grep 'bionic_amd64.deb\|focal_amd64.deb\|jammy_amd64.deb' | head -1 | cut -d'"' -f4)
+                if [[ -n "$AIL_DEB_URL" ]]; then
+                    log_info "Installing AppImageLauncher from GitHub..."
+                    local TMP_DEB="/tmp/appimagelauncher.deb"
+                    curl -fsSL -o "$TMP_DEB" "$AIL_DEB_URL" && sudo dpkg -i "$TMP_DEB" || log_warn "AppImageLauncher install failed"
+                    rm -f "$TMP_DEB"
+                else
+                    log_warn "Could not find AppImageLauncher .deb URL — skipping"
+                fi
+            fi
+            ;;
+        arch)
+            pkg_install appimagelauncher
+            ;;
+        darwin) ;;  # AppImages are Linux-only
+    esac
+}
+
 install_wine() {
     case "$DISTRO_FAMILY" in
         fedora)
@@ -596,6 +633,7 @@ install_packages() {
     install_protonvpn
     install_gh_cli
     install_wine
+    install_appimagelauncher
 
     # macOS-only desktop apps: Claude and Codex.
     if is_macos; then
