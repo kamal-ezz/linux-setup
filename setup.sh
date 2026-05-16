@@ -2288,13 +2288,6 @@ setup_dotfiles() {
         ".config/opencode/opencode.jsonc"
         ".pi/agent/settings.json"
         ".pi/agent/keybindings.json"
-        ".pi/agent/extensions/bell-notifications.ts"
-        ".pi/agent/extensions/commit.ts"
-        ".pi/agent/extensions/companion.ts"
-        ".pi/agent/extensions/clipboard-rendering.ts"
-        ".pi/agent/extensions/diff.ts"
-        ".pi/agent/extensions/effort.ts"
-        ".pi/agent/extensions/plan-mode.ts"
     )
 
     # Linux-only: systemd user units and Steam shortcut fixer

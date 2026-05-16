@@ -2,4 +2,5 @@
 .message-list {
   width: 22em;
   min-height: 18em;
+  max-height: 65vh;
 }
