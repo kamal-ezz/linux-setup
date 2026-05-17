@@ -20,14 +20,17 @@ for file in "${PI_FILES[@]}"; do
     continue
   fi
 
-  if [[ -e "$target" && ! -L "$target" ]]; then
+  mkdir -p "$(dirname "$target")"
+
+  if [[ -L "$target" ]]; then
+    rm -f "$target"
+  elif [[ -e "$target" ]] && ! cmp -s "$source" "$target"; then
     mkdir -p "$BACKUP_DIR/$(dirname "$file")"
     mv "$target" "$BACKUP_DIR/$file"
     echo "backed up $target → $BACKUP_DIR/$file"
   fi
 
-  mkdir -p "$(dirname "$target")"
-  ln -sf "$source" "$target"
+  cp -p "$source" "$target"
   echo "synced ~/$file"
 done
 

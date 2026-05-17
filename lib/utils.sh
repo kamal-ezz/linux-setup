@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-pkg_installed() {
-    rpm -q "$1" &>/dev/null || rpm -q --whatprovides "$1" &>/dev/null
-}
-
 cmd_exists() {
     command -v "$1" &>/dev/null
 }
@@ -64,7 +60,7 @@ add_dnf_repo_from_url() {
     # Fallback: download the .repo file directly — works on DNF4 and DNF5
     local filename
     filename=$(basename "${url%%\?*}")
-    if curl -fsSL "$url" | sudo tee "/etc/yum.repos.d/${filename}" > /dev/null; then
+    if safe_curl -fsSL "$url" | sudo tee "/etc/yum.repos.d/${filename}" > /dev/null; then
         return 0
     fi
 
@@ -212,7 +208,7 @@ dnf_run_with_repair() {
 
         if [[ "$attempt" -eq 3 ]]; then
             log_error "DNF command failed after automatic repairs: dnf $*"
-            rm -f "$dnf_log"
+            log_error "Last DNF output preserved at: $dnf_log"
             return 1
         fi
 
@@ -269,6 +265,51 @@ dnf_run_optional() {
         log_warn "DNF command failed, continuing: dnf $*"
         return 0
     }
+}
+
+# curl wrapper with retries. Covers transient failures: short network blips,
+# GitHub/SourceForge/etc. having a bad minute, slow DNS, 5xx responses.
+# --retry-all-errors needs curl ≥ 7.71 (2020); all supported distros have it.
+# Pass any extra curl flags after the URL just like plain curl.
+safe_curl() {
+    curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$@"
+}
+
+# Fetch a single file from a GitHub repo without going through
+# raw.githubusercontent.com (which some ISPs block). Tries jsDelivr's GitHub
+# mirror first, then falls back to extracting the file from the codeload.github.com
+# tarball for the given ref.
+#
+# Usage: gh_raw_fetch <user/repo> <ref> <path/in/repo> <output-file>
+gh_raw_fetch() {
+    local repo="$1" ref="$2" path="$3" out="$4"
+
+    mkdir -p "$(dirname "$out")"
+
+    # jsDelivr rejects unencoded spaces; encode them so filenames like
+    # "MesloLGS NF Regular.ttf" go through the mirror instead of always
+    # falling back to the tarball.
+    local jsd_url="https://cdn.jsdelivr.net/gh/${repo}@${ref}/${path// /%20}"
+    if safe_curl -fsSL "$jsd_url" -o "$out"; then
+        return 0
+    fi
+
+    log_warn "jsDelivr fetch failed for ${repo}@${ref}/${path}; falling back to codeload tarball"
+
+    local tmp tar found
+    tmp=$(mktemp -d)
+    tar="$tmp/src.tar.gz"
+    if safe_curl -fsSL "https://codeload.github.com/${repo}/tar.gz/refs/heads/${ref}" -o "$tar" \
+       && tar -xzf "$tar" -C "$tmp" --wildcards "*/${path}" 2>/dev/null; then
+        found=$(find "$tmp" -type f -path "*/${path}" | head -1)
+        if [[ -n "$found" ]]; then
+            install -D -m 0644 "$found" "$out"
+            rm -rf "$tmp"
+            return 0
+        fi
+    fi
+    rm -rf "$tmp"
+    return 1
 }
 
 err_handler() {

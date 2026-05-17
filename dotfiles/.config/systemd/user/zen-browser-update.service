@@ -1,7 +1,0 @@
-[Unit]
-Description=Zen Browser auto-updater
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/bin/zen-update

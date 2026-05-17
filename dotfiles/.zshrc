@@ -1,5 +1,21 @@
+# Keep PATH entries unique, even when starting nested shells.
+typeset -U path PATH
+
+_path_prepend_existing() {
+  local dir
+  local -a dirs
+  for dir in "$@"; do
+    [[ -d "$dir" ]] && dirs+=("$dir")
+  done
+  path=("${dirs[@]}" "${path[@]}")
+}
+
+_path_prepend_existing "$HOME/.local/bin" "$HOME/.local/share/fnm"
+
 # fnm must be initialized before the instant prompt to avoid console output warnings.
-eval "$(fnm env --use-on-cd --shell zsh 2>/dev/null)" 2>/dev/null || true
+if command -v fnm >/dev/null 2>&1; then
+  eval "$(fnm env --use-on-cd --shell zsh 2>/dev/null)" 2>/dev/null || true
+fi
 
 # Keep terminal applications colorful even if the parent desktop/session exports
 # the no-color convention.
@@ -142,7 +158,7 @@ source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-export PATH="$HOME/.local/bin:$HOME/.zvm/bin:$HOME/.zvm/self:$PATH"
+_path_prepend_existing "$HOME/.zvm/bin" "$HOME/.zvm/self"
 
 # Homebrew (macOS)
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -158,16 +174,16 @@ fi
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+_path_prepend_existing "$BUN_INSTALL/bin"
 
 # opencode
-export PATH="$HOME/.opencode/bin:$PATH"
+_path_prepend_existing "$HOME/.opencode/bin"
 
 # The next line enables shell command completion for gcloud.
 if [ -f '/home/kamal/.local/share/google-cloud-sdk/completion.zsh.inc' ]; then . '/home/kamal/.local/share/google-cloud-sdk/completion.zsh.inc'; fi
 
 # >>> grok installer >>>
-export PATH="$HOME/.grok/bin:$PATH"
+_path_prepend_existing "$HOME/.grok/bin"
 # <<< grok installer <<<
 
 # Ghostty: persist cwd across sessions
@@ -178,3 +194,9 @@ if [[ "$TERM_PROGRAM" == "ghostty" ]]; then
   _ghostty_save_cwd() { mkdir -p "$(dirname "$_GHOSTTY_LAST_CWD")"; print -r -- "$PWD" >"$_GHOSTTY_LAST_CWD" }
   add-zsh-hook chpwd _ghostty_save_cwd
 fi
+
+unfunction _path_prepend_existing 2>/dev/null || true
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"

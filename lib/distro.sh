@@ -43,7 +43,7 @@ bootstrap_homebrew() {
         return 0
     fi
     log_info "Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    /bin/bash -c "$(safe_curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     # Add Homebrew to PATH for the remainder of this script invocation
     if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -289,7 +289,7 @@ add_apt_repo() {
 
     sudo install -d -m 0755 /etc/apt/keyrings
     if [[ ! -f "$keyring" ]]; then
-        curl -fsSL "$key_url" | sudo gpg --dearmor -o "$keyring"
+        safe_curl -fsSL "$key_url" | sudo gpg --dearmor -o "$keyring"
     fi
     if [[ ! -f "$listfile" ]]; then
         echo "$repo_line" | sudo tee "$listfile" > /dev/null

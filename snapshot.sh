@@ -2,13 +2,9 @@
 # Capture current OS config state into this repo and push.
 # Run from any directory — it always operates on the repo it lives in.
 #
-# What gets snapshotted:
-#   - Zen browser mods + keyboard shortcuts (from active profile)
-#   - VS Code settings
-#   - Git config
-#   - opencode config
-#   - GNOME extension list (informational)
-#   - Dotfiles are symlinked so always current; no action needed
+# Dotfiles are copied (not symlinked) into $HOME by setup.sh, so this script is
+# the only way host edits get back into the repo. Re-run it after any local
+# tweak you want to keep.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,11 +19,47 @@ capture() {
         return
     fi
     mkdir -p "$(dirname "$dest")"
-    cp "$src" "$dest"
+    cp -p "$src" "$dest"
     log_info "Captured $rel"
 }
 
-# ─── Zen ──────────────────────────────────────────────────────────────────────
+# ─── Shell + Git ──────────────────────────────────────────────────────────────
+
+log_section "Shell + Git"
+
+capture "$HOME/.zshrc"             ".zshrc"
+capture "$HOME/.p10k.zsh"          ".p10k.zsh"
+capture "$HOME/.gitconfig"         ".gitconfig"
+capture "$HOME/.gitconfig-work"    ".gitconfig-work"
+capture "$HOME/.gitconfig-imedia24" ".gitconfig-imedia24"
+
+# ─── App configs ──────────────────────────────────────────────────────────────
+
+log_section "App configs"
+
+capture "$HOME/.config/ghostty/config"           ".config/ghostty/config"
+capture "$HOME/.config/fontconfig/fonts.conf"    ".config/fontconfig/fonts.conf"
+capture "$HOME/.config/Code/User/settings.json"  ".config/Code/User/settings.json"
+capture "$HOME/.config/Code/User/keybindings.json" ".config/Code/User/keybindings.json"
+capture "$HOME/.config/opencode/opencode.jsonc"  ".config/opencode/opencode.jsonc"
+
+# ─── Pi agent ─────────────────────────────────────────────────────────────────
+
+log_section "Pi agent"
+
+capture "$HOME/.pi/agent/settings.json"    ".pi/agent/settings.json"
+capture "$HOME/.pi/agent/keybindings.json" ".pi/agent/keybindings.json"
+capture "$HOME/.pi/agent/mcp.json"         ".pi/agent/mcp.json"
+
+# ─── Steam shortcut fixer ─────────────────────────────────────────────────────
+
+log_section "Steam shortcut fixer"
+
+capture "$HOME/.local/bin/fix-steam-shortcuts"                          ".local/bin/fix-steam-shortcuts"
+capture "$HOME/.config/systemd/user/fix-steam-shortcuts.service"        ".config/systemd/user/fix-steam-shortcuts.service"
+capture "$HOME/.config/systemd/user/fix-steam-shortcuts.path"           ".config/systemd/user/fix-steam-shortcuts.path"
+
+# ─── Zen browser (lives behind a randomized profile dir) ──────────────────────
 
 log_section "Zen browser"
 
@@ -41,27 +73,6 @@ else
         capture "$ZEN_PROFILE/$f" ".config/zen/$f"
     done
 fi
-
-# ─── VS Code ──────────────────────────────────────────────────────────────────
-
-log_section "VS Code"
-
-VSCODE_USER="$HOME/.config/Code/User"
-capture "$VSCODE_USER/settings.json"    ".config/Code/User/settings.json"
-capture "$VSCODE_USER/keybindings.json" ".config/Code/User/keybindings.json"
-
-# ─── Git ──────────────────────────────────────────────────────────────────────
-
-log_section "Git"
-
-capture "$HOME/.gitconfig"      ".gitconfig"
-capture "$HOME/.gitconfig-work" ".gitconfig-work"
-
-# ─── opencode ─────────────────────────────────────────────────────────────────
-
-log_section "opencode"
-
-capture "$HOME/.config/opencode/opencode.jsonc" ".config/opencode/opencode.jsonc"
 
 # ─── GNOME ────────────────────────────────────────────────────────────────────
 

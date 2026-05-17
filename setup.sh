@@ -46,6 +46,7 @@ list_sections() {
     echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
     echo "  zen          Zen Browser AppImage"
+    echo "  steam-components Steam Linux Runtime + Proton + Steamworks Common (run as --only steam-components; needs Steam GUI)"
     echo "  steam-shortcuts  Fix Steam game shortcuts (add StartupWMClass for dock icons)"
     echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
     echo "  asus         asusctl/supergfxctl (auto-skips if not ASUS hardware)"
@@ -61,8 +62,7 @@ list_sections() {
     echo "  gnome        GNOME-only configuration + Nautilus customizations"
     echo "  kde          KDE Plasma-only configuration"
     echo "  rice         GNOME-only font/cursor apply, Blur my Shell, Night Light"
-    echo "  dotfiles     Dotfiles symlinks"
-    echo "  relink       Re-point dotfile symlinks after the repo is moved/renamed (run as --only relink)"
+    echo "  dotfiles     Install dotfiles into \$HOME (real files, not symlinks)"
     echo "  shell-default  Set zsh as default shell"
     echo ""
     echo "Examples:"
@@ -102,7 +102,7 @@ should_run() {
     local section="$1"
     # Hidden/manual sections: only run when explicitly requested with --only.
     case "$section" in
-        steam-components|relink)
+        steam-components)
             [[ ${#ONLY_SECTIONS[@]} -eq 0 ]] && return 1
             ;;
     esac
@@ -145,7 +145,7 @@ section_supported_on_desktop() {
 # Anything not listed runs offline (git config, desktop settings, dotfiles, etc.).
 NETWORK_SECTIONS=(
     repos upgrade packages ms-fonts extra-tools ghostty flatpak zen steam-components
-    nvidia asus fonts shell node ssh vscode rice virt snapper
+    nvidia asus fonts shell node ssh services vscode rice virt snapper
 )
 
 section_needs_internet() {
@@ -191,7 +191,7 @@ install_gnome_ext() {
     fi
 
     local EXT_INFO
-    EXT_INFO=$(curl -fsSL \
+    EXT_INFO=$(safe_curl -fsSL \
         "https://extensions.gnome.org/extension-info/?uuid=${uuid}&shell_version=${GNOME_VER}" 2>/dev/null)
 
     local DOWNLOAD_URL
@@ -205,7 +205,7 @@ install_gnome_ext() {
     fi
 
     local EXT_ZIP="/tmp/${uuid}.zip"
-    curl -fsSL "https://extensions.gnome.org${DOWNLOAD_URL}" -o "$EXT_ZIP"
+    safe_curl -fsSL "https://extensions.gnome.org${DOWNLOAD_URL}" -o "$EXT_ZIP"
     gnome-extensions install --force "$EXT_ZIP"
     rm -f "$EXT_ZIP"
     log_info "Installed extension: $name"
@@ -374,11 +374,17 @@ EOF
         log_warn "WineHQ repo already configured"
     fi
 
-    if ! rpm -q protonvpn-stable-release &>/dev/null; then
+    if ! pkg_installed protonvpn-stable-release; then
         log_info "Adding ProtonVPN repository..."
         local PVN_RPM="/tmp/protonvpn-stable-release.rpm"
-        local PVN_URL="https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable-release/protonvpn-stable-release-1.0.3-1.noarch.rpm"
-        if curl -fLo "$PVN_RPM" "$PVN_URL" 2>/dev/null; then
+        local PVN_DIR_URL="https://repo.protonvpn.com/fedora-$(rpm -E %fedora)-stable/protonvpn-stable-release/"
+        # Resolve the current release RPM dynamically — hardcoding a version
+        # ages out as soon as Proton publishes a new one.
+        local PVN_FILE
+        PVN_FILE=$(safe_curl -fsSL "$PVN_DIR_URL" 2>/dev/null \
+            | grep -oE 'protonvpn-stable-release-[0-9][^"<>]*\.noarch\.rpm' \
+            | sort -Vr | head -1 || true)
+        if [[ -n "$PVN_FILE" ]] && safe_curl -fLo "$PVN_RPM" "${PVN_DIR_URL}${PVN_FILE}" 2>/dev/null; then
             dnf_run_optional install -y "$PVN_RPM"
             sudo dnf check-update --refresh 2>/dev/null || true
             rm -f "$PVN_RPM"
@@ -501,7 +507,7 @@ install_docker_engine() {
     # Docker Engine from the upstream repo. Package list differs per distro.
     local conflicts
     read -ra conflicts <<< "$(pkgs_docker_conflicts)"
-    pkg_remove "${conflicts[@]}"
+    [[ ${#conflicts[@]} -gt 0 ]] && pkg_remove "${conflicts[@]}"
 
     case "$DISTRO_FAMILY" in
         fedora|debian)
@@ -556,43 +562,6 @@ install_gh_cli() {
         debian) pkg_install gh ;;
         arch)   pkg_install github-cli ;;
         darwin) pkg_install gh ;;
-    esac
-}
-
-install_appimagelauncher() {
-    case "$DISTRO_FAMILY" in
-        fedora)
-            if ! rpm -q appimagelauncher &>/dev/null; then
-                local AIL_RPM_URL
-                AIL_RPM_URL=$(curl -fsSL "https://api.github.com/repos/TheAssassin/AppImageLauncher/releases/latest" \
-                    | grep browser_download_url | grep x86_64.rpm | head -1 | cut -d'"' -f4)
-                if [[ -n "$AIL_RPM_URL" ]]; then
-                    log_info "Installing AppImageLauncher from GitHub..."
-                    dnf_run_optional install -y "$AIL_RPM_URL" || log_warn "AppImageLauncher install failed"
-                else
-                    log_warn "Could not find AppImageLauncher RPM URL — skipping"
-                fi
-            fi
-            ;;
-        debian)
-            if ! dpkg -l appimagelauncher &>/dev/null 2>&1; then
-                local AIL_DEB_URL
-                AIL_DEB_URL=$(curl -fsSL "https://api.github.com/repos/TheAssassin/AppImageLauncher/releases/latest" \
-                    | grep browser_download_url | grep 'bionic_amd64.deb\|focal_amd64.deb\|jammy_amd64.deb' | head -1 | cut -d'"' -f4)
-                if [[ -n "$AIL_DEB_URL" ]]; then
-                    log_info "Installing AppImageLauncher from GitHub..."
-                    local TMP_DEB="/tmp/appimagelauncher.deb"
-                    curl -fsSL -o "$TMP_DEB" "$AIL_DEB_URL" && sudo dpkg -i "$TMP_DEB" || log_warn "AppImageLauncher install failed"
-                    rm -f "$TMP_DEB"
-                else
-                    log_warn "Could not find AppImageLauncher .deb URL — skipping"
-                fi
-            fi
-            ;;
-        arch)
-            pkg_install appimagelauncher
-            ;;
-        darwin) ;;  # AppImages are Linux-only
     esac
 }
 
@@ -665,7 +634,6 @@ install_packages() {
     install_protonvpn
     install_gh_cli
     install_wine
-    install_appimagelauncher
 
     # macOS-only desktop apps: Claude and Codex.
     if is_macos; then
@@ -676,7 +644,7 @@ install_packages() {
     # (these come from RPM Fusion; no direct equivalent on Ubuntu/Arch — those
     # ship working VA-API stacks by default).
     if [[ "$DISTRO_FAMILY" == "fedora" ]]; then
-        if rpm -q ffmpeg-free &>/dev/null && ! rpm -q ffmpeg &>/dev/null; then
+        if pkg_installed ffmpeg-free && ! pkg_installed ffmpeg; then
             log_info "Swapping ffmpeg-free → ffmpeg for full codec support..."
             dnf_run_optional swap -y ffmpeg-free ffmpeg --allowerasing
         else
@@ -722,14 +690,14 @@ install_ms_fonts() {
             return
             ;;
         fedora)
-            if rpm -q msttcore-fonts-installer &>/dev/null; then
+            if pkg_installed msttcore-fonts-installer; then
                 log_warn "Microsoft fonts already installed, skipping"
                 summary_skip "Microsoft fonts (already installed)"
                 return
             fi
             local TMP_RPM="/tmp/msttcore-fonts-installer.rpm"
             log_info "Downloading Microsoft fonts installer..."
-            curl -fLo "$TMP_RPM" \
+            safe_curl -fLo "$TMP_RPM" \
                 "https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm"
             dnf_run_optional install -y "$TMP_RPM"
             rm -f "$TMP_RPM"
@@ -737,8 +705,14 @@ install_ms_fonts() {
         debian)
             # ttf-mscorefonts-installer (multiverse on Ubuntu, contrib on Debian)
             # accepts the EULA via debconf; pre-seed it for non-interactive install.
-            echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
-                | sudo debconf-set-selections
+            if cmd_exists debconf-set-selections; then
+                echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+                    | sudo debconf-set-selections
+            else
+                pkg_install debconf-utils && \
+                    echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+                        | sudo debconf-set-selections
+            fi
             pkg_install ttf-mscorefonts-installer
             ;;
         arch)
@@ -766,7 +740,7 @@ install_extra_tools() {
         if is_macos; then
             brew install yt-dlp
         else
-            curl -fLo "$HOME/.local/bin/yt-dlp" \
+            safe_curl -fLo "$HOME/.local/bin/yt-dlp" \
                 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
             chmod +x "$HOME/.local/bin/yt-dlp"
         fi
@@ -783,7 +757,7 @@ install_extra_tools() {
             brew install neovim
         else
             local NVIM_TMP="/tmp/nvim-linux-x86_64.tar.gz"
-            curl -fLo "$NVIM_TMP" \
+            safe_curl -fLo "$NVIM_TMP" \
                 https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
             sudo tar -C /opt -xzf "$NVIM_TMP"
             sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
@@ -803,11 +777,37 @@ install_extra_tools() {
     else
         log_info "Installing opencode via the official install script..."
         local OC_SCRIPT="/tmp/opencode-install.sh"
-        if curl -fsSL https://opencode.ai/install -o "$OC_SCRIPT"; then
-            bash "$OC_SCRIPT" && summary_ok "opencode" || summary_fail "opencode"
+        local oc_installed=0
+        if safe_curl -fsSL https://opencode.ai/install -o "$OC_SCRIPT"; then
+            bash "$OC_SCRIPT" && oc_installed=1
             rm -f "$OC_SCRIPT"
+        fi
+        if [[ "$oc_installed" -ne 1 ]]; then
+            # Fallback: GitHub release tarball. The install script downloads
+            # the same binary.
+            log_warn "opencode install script unavailable; falling back to GitHub release binary"
+            local oc_asset
+            case "$(uname -m)" in
+                x86_64|amd64)  oc_asset="opencode-linux-x64.tar.gz" ;;
+                aarch64|arm64) oc_asset="opencode-linux-arm64.tar.gz" ;;
+                *) log_warn "No opencode release binary for $(uname -m)"; oc_asset="" ;;
+            esac
+            if [[ -n "$oc_asset" ]]; then
+                local OC_TAR="/tmp/$oc_asset"
+                if safe_curl -fLo "$OC_TAR" \
+                        "https://github.com/anomalyco/opencode/releases/latest/download/$oc_asset"; then
+                    tar -xzf "$OC_TAR" -C "$HOME/.local/bin" opencode 2>/dev/null \
+                        || tar -xzf "$OC_TAR" -C "$HOME/.local/bin"
+                    chmod +x "$HOME/.local/bin/opencode" 2>/dev/null || true
+                    rm -f "$OC_TAR"
+                    oc_installed=1
+                fi
+            fi
+        fi
+        if [[ "$oc_installed" -eq 1 ]]; then
+            summary_ok "opencode"
         else
-            log_warn "Could not download opencode install script, skipping"
+            log_warn "Could not install opencode (script + release binary both failed)"
             summary_fail "opencode"
         fi
     fi
@@ -832,7 +832,7 @@ install_extra_tools() {
         esac
 
         local OCD_URL
-        OCD_URL=$(curl -fsSL "https://api.github.com/repos/anomalyco/opencode/releases/latest" \
+        OCD_URL=$(safe_curl -fsSL "https://api.github.com/repos/anomalyco/opencode/releases/latest" \
             | python3 -c "
 import sys, json
 pat = sys.argv[1]
@@ -845,7 +845,7 @@ for a in d.get('assets', []):
 
         if [[ -n "$OCD_URL" ]]; then
             local OCD_TMP="/tmp/opencode-desktop.${ocd_pattern##*.}"
-            curl -fLo "$OCD_TMP" "$OCD_URL"
+            safe_curl -fLo "$OCD_TMP" "$OCD_URL"
             if [[ "$ocd_pattern" == *AppImage ]]; then
                 sudo install -m 0755 "$OCD_TMP" /opt/opencode-desktop.AppImage
                 sudo ln -sf /opt/opencode-desktop.AppImage /usr/local/bin/opencode-desktop
@@ -890,16 +890,41 @@ install_ghostty() {
     else
         log_info "Installing zvm..."
         local ZVM_SCRIPT="/tmp/zvm-install.sh"
-        curl -fsSL https://www.zvm.app/install.sh -o "$ZVM_SCRIPT"
-        bash "$ZVM_SCRIPT"
-        rm -f "$ZVM_SCRIPT"
+        local zvm_installed=0
+        if safe_curl -fsSL https://www.zvm.app/install.sh -o "$ZVM_SCRIPT"; then
+            bash "$ZVM_SCRIPT" && zvm_installed=1
+            rm -f "$ZVM_SCRIPT"
+        fi
+        if [[ "$zvm_installed" -ne 1 ]]; then
+            # Fallback: GitHub release tarball. The install script does the
+            # same thing internally.
+            log_warn "zvm install script unavailable; falling back to GitHub release binary"
+            local zvm_asset
+            case "$(uname -m)" in
+                x86_64|amd64)  zvm_asset="zvm-linux-amd64.tar" ;;
+                aarch64|arm64) zvm_asset="zvm-linux-arm64.tar" ;;
+                *) log_warn "No zvm release binary for $(uname -m)"; zvm_asset="" ;;
+            esac
+            if [[ -n "$zvm_asset" ]]; then
+                local ZVM_TAR="/tmp/$zvm_asset"
+                if safe_curl -fLo "$ZVM_TAR" \
+                        "https://github.com/tristanisham/zvm/releases/latest/download/$zvm_asset"; then
+                    mkdir -p "$HOME/.zvm/self" "$HOME/.zvm/bin"
+                    tar -xf "$ZVM_TAR" -C "$HOME/.zvm/self"
+                    chmod +x "$HOME/.zvm/self/zvm"
+                    rm -f "$ZVM_TAR"
+                else
+                    log_warn "Could not download zvm release binary"
+                fi
+            fi
+        fi
     fi
 
     export PATH="$HOME/.zvm/bin:$HOME/.zvm/self:$PATH"
 
     # Latest stable Ghostty tag
     local GHOSTTY_TAG
-    GHOSTTY_TAG=$(curl -fsSL https://api.github.com/repos/ghostty-org/ghostty/releases/latest \
+    GHOSTTY_TAG=$(safe_curl -fsSL https://api.github.com/repos/ghostty-org/ghostty/releases/latest \
         | grep '"tag_name"' | grep -o '"[^"]*"' | tail -1 | tr -d '"' || true)
     if [[ -z "$GHOSTTY_TAG" ]]; then
         log_warn "Could not determine latest Ghostty release tag — skipping"
@@ -1006,8 +1031,11 @@ install_zen() {
 
     log_info "Fetching latest Zen Browser release info"
     local api_json
-    api_json=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest") \
+    api_json=$(safe_curl -fsSL "https://api.github.com/repos/${repo}/releases/latest") \
         || { log_warn "Failed to fetch Zen release info"; summary_fail "Zen Browser"; return 1; }
+    if [[ -z "$api_json" ]]; then
+        log_warn "Empty Zen release info"; summary_fail "Zen Browser"; return 1
+    fi
 
     local version appimage_url sha256
     version=$(printf '%s' "$api_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))')
@@ -1046,7 +1074,7 @@ for asset in data.get("assets", []):
 
     local tmp_appimage="/tmp/${appimage_name}"
     log_info "Downloading $appimage_url"
-    curl -fL# --output "$tmp_appimage" "$appimage_url"
+    safe_curl -fL# --output "$tmp_appimage" "$appimage_url"
     if [[ -n "$sha256" ]]; then
         log_info "Verifying checksum"
         printf '%s  %s\n' "$sha256" "$tmp_appimage" | sha256sum --check --status \
@@ -1088,15 +1116,6 @@ EOF
     printf '%s' "$version" > "$version_file"
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
     gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-
-    # Enable the weekly auto-updater (requires dotfiles to be symlinked first)
-    if [[ -f "$HOME/.local/bin/zen-update" ]]; then
-        systemctl --user enable --now zen-browser-update.timer 2>/dev/null \
-            && log_info "Enabled zen-browser-update.timer (weekly auto-updates)" \
-            || log_warn "Could not enable zen-browser-update.timer (no user session?)"
-    else
-        log_warn "zen-update script not found; run --only dotfiles first, then re-run --only zen to enable the timer"
-    fi
 
     # Copy Zen mods and keyboard shortcuts to the active profile
     local zen_profile
@@ -1143,13 +1162,30 @@ install_steam_components() {
     log_info "Requesting Steam to install/update required compatibility tools..."
     log_warn "Steam may open and prompt you to sign in; downloads continue in the Steam client."
 
+    # Launch Steam once and let it come up before we hand it deep-link URLs.
+    # The previous version queued three URLs in a 3-second loop, which races
+    # Steam's startup and silently drops the URLs that arrive too early.
+    if ! pgrep -x steam >/dev/null 2>&1; then
+        nohup steam >/dev/null 2>&1 &
+        log_info "Waiting for Steam to start..."
+        local waited=0
+        while ! pgrep -x steam >/dev/null 2>&1; do
+            sleep 1
+            waited=$((waited + 1))
+            [[ "$waited" -ge 30 ]] && break
+        done
+        # Steam's URL handler needs a few seconds after the main process appears.
+        sleep 8
+    fi
+
     local entry appid name
     for entry in "${components[@]}"; do
         appid="${entry%%|*}"
         name="${entry#*|}"
         log_info "Queueing $name (app $appid)..."
-        nohup steam "steam://install/${appid}" >/dev/null 2>&1 &
-        sleep 3
+        steam "steam://install/${appid}" >/dev/null 2>&1 || \
+            log_warn "Could not queue $name; queue it manually from the Steam client"
+        sleep 5
     done
 
     summary_ok "Steam runtime components queued"
@@ -1184,11 +1220,14 @@ fix_steam_shortcuts() {
 
 # ─── Section 11: NVIDIA Drivers ───────────────────────────────────────────────
 
+# Each install_nvidia_<family> returns 0 if it installed (caller emits the
+# "reboot required" summary), or 1 if it was a no-op (caller stays quiet —
+# the function has already emitted its own skip/fail summary line).
 install_nvidia_fedora() {
     if pkg_installed akmod-nvidia; then
         log_warn "akmod-nvidia already installed, skipping"
         summary_skip "NVIDIA drivers (already installed)"
-        return
+        return 1
     fi
     log_info "Installing NVIDIA drivers (RPM Fusion)..."
     dnf_run_optional install -y \
@@ -1204,37 +1243,44 @@ install_nvidia_fedora() {
     else
         log_warn "nvidia-drm.modeset=1 already set"
     fi
+    return 0
 }
 
 install_nvidia_debian() {
     if pkg_installed nvidia-driver; then
         log_warn "nvidia-driver already installed, skipping"
         summary_skip "NVIDIA drivers (already installed)"
-        return
+        return 1
     fi
     log_info "Installing NVIDIA drivers via ubuntu-drivers / nvidia-driver..."
     if cmd_exists ubuntu-drivers; then
-        sudo ubuntu-drivers install || pkg_install nvidia-driver-535
+        # ubuntu-drivers picks the recommended driver dynamically; no hardcoded
+        # version number to age out as Ubuntu rotates default drivers.
+        sudo ubuntu-drivers install || sudo ubuntu-drivers autoinstall
     else
         # Debian: nvidia-driver from non-free; ensure non-free enabled
         pkg_install nvidia-driver firmware-misc-nonfree libnvidia-encode1 nvidia-vaapi-driver || true
     fi
+    return 0
 }
 
 install_nvidia_arch() {
     if pkg_installed nvidia-dkms; then
         log_warn "nvidia-dkms already installed, skipping"
         summary_skip "NVIDIA drivers (already installed)"
-        return
+        return 1
     fi
     log_info "Installing NVIDIA drivers (nvidia-dkms)..."
     pkg_install nvidia-dkms nvidia-utils lib32-nvidia-utils nvidia-settings libva-nvidia-driver
 
-    # Add nvidia-drm.modeset=1 to kernel cmdline (GRUB)
+    # Add nvidia-drm.modeset=1 to kernel cmdline (GRUB). Scoped to
+    # GRUB_CMDLINE_LINUX_DEFAULT only — GRUB_CMDLINE_LINUX is intentionally
+    # left alone.
     if [[ -f /etc/default/grub ]] && ! grep -q "nvidia-drm.modeset=1" /etc/default/grub; then
         sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\([^"]*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 nvidia-drm.modeset=1"/' /etc/default/grub
         sudo grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
     fi
+    return 0
 }
 
 install_nvidia() {
@@ -1246,19 +1292,22 @@ install_nvidia() {
         return
     fi
 
+    local installed=0
     case "$DISTRO_FAMILY" in
-        fedora) install_nvidia_fedora ;;
-        debian) install_nvidia_debian ;;
-        arch)   install_nvidia_arch ;;
+        fedora) install_nvidia_fedora && installed=1 ;;
+        debian) install_nvidia_debian && installed=1 ;;
+        arch)   install_nvidia_arch && installed=1 ;;
     esac
 
-    echo ""
-    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_warn "  NVIDIA: kernel module will build on first boot."
-    log_warn "  Do NOT skip the reboot at the end of this script."
-    log_warn "  If Secure Boot is enabled, you must enroll the MOK key."
-    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    summary_ok "NVIDIA drivers (reboot required)"
+    if [[ "$installed" -eq 1 ]]; then
+        echo ""
+        log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_warn "  NVIDIA: kernel module will build on first boot."
+        log_warn "  Do NOT skip the reboot at the end of this script."
+        log_warn "  If Secure Boot is enabled, you must enroll the MOK key."
+        log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        summary_ok "NVIDIA drivers (reboot required)"
+    fi
 }
 
 # ─── Section 11: ASUS Linux Tools ────────────────────────────────────────────
@@ -1339,7 +1388,7 @@ install_inter_font() {
     log_info "Installing Inter font..."
     local INTER_ZIP="/tmp/inter.zip"
     local INTER_URL
-    INTER_URL=$(curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
+    INTER_URL=$(safe_curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
         | grep -o '"browser_download_url": *"[^"]*Inter-[^"]*\.zip"' \
         | grep -o 'https://[^"]*' | head -1 || true)
     if [[ -z "$INTER_URL" ]]; then
@@ -1347,7 +1396,7 @@ install_inter_font() {
         return 0
     fi
 
-    if curl -fLo "$INTER_ZIP" "$INTER_URL"; then
+    if safe_curl -fLo "$INTER_ZIP" "$INTER_URL"; then
         mkdir -p "$HOME/.local/share/fonts/Inter"
         unzip -j -q "$INTER_ZIP" "*/extras/otf/*.otf" \
             -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
@@ -1369,7 +1418,7 @@ install_catppuccin_cursor() {
     log_info "Installing Catppuccin cursor..."
     local CURSOR_ZIP="/tmp/catppuccin-cursors.zip"
     local CURSOR_URL
-    CURSOR_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/cursors/releases/latest \
+    CURSOR_URL=$(safe_curl -fsSL https://api.github.com/repos/catppuccin/cursors/releases/latest \
         | grep -oi '"browser_download_url": *"[^"]*mocha[^"]*dark[^"]*\.zip"' \
         | grep -o 'https://[^"]*' | head -1 || true)
     if [[ -z "$CURSOR_URL" ]]; then
@@ -1377,7 +1426,7 @@ install_catppuccin_cursor() {
         return 0
     fi
 
-    if curl -fLo "$CURSOR_ZIP" "$CURSOR_URL"; then
+    if safe_curl -fLo "$CURSOR_ZIP" "$CURSOR_URL"; then
         mkdir -p "$HOME/.local/share/icons"
         unzip -q "$CURSOR_ZIP" -d "$HOME/.local/share/icons/"
         log_info "Catppuccin cursor installed."
@@ -1403,7 +1452,6 @@ install_fonts() {
     if [[ -f "$FONT_CHECK" ]]; then
         log_warn "MesloLGS NF already installed"
     else
-        local BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
         local FONTS=(
             "MesloLGS NF Regular.ttf"
             "MesloLGS NF Bold.ttf"
@@ -1413,7 +1461,8 @@ install_fonts() {
 
         for font in "${FONTS[@]}"; do
             log_info "Downloading $font..."
-            curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
+            gh_raw_fetch romkatv/powerlevel10k-media master "$font" "$FONT_DIR/$font" \
+                || log_warn "Could not download $font"
         done
 
         fc-cache -fv "$FONT_DIR"
@@ -1434,10 +1483,20 @@ install_shell_extras() {
     else
         log_info "Installing Oh My Zsh..."
         local OMZ_SCRIPT="/tmp/omz-install.sh"
-        curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh \
-            -o "$OMZ_SCRIPT"
-        RUNZSH=no CHSH=no bash "$OMZ_SCRIPT"
-        rm -f "$OMZ_SCRIPT"
+        if gh_raw_fetch ohmyzsh/ohmyzsh master tools/install.sh "$OMZ_SCRIPT"; then
+            RUNZSH=no CHSH=no bash "$OMZ_SCRIPT"
+            rm -f "$OMZ_SCRIPT"
+        else
+            # Fallback: clone the repo directly. Git uses plain HTTPS and goes
+            # through ISPs that block raw.githubusercontent.com / jsDelivr.
+            log_warn "Installer fetch failed; falling back to git clone"
+            if git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"; then
+                [[ -f "$HOME/.zshrc" ]] || \
+                    cp "$HOME/.oh-my-zsh/templates/zshrc.zsh-template" "$HOME/.zshrc"
+            else
+                log_warn "Could not install Oh My Zsh (installer + git clone both failed)"
+            fi
+        fi
     fi
 
     local ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
@@ -1487,9 +1546,36 @@ install_node() {
     else
         log_info "Installing fnm..."
         local FNM_SCRIPT="/tmp/fnm-install.sh"
-        curl -fsSL https://fnm.vercel.app/install -o "$FNM_SCRIPT"
-        bash "$FNM_SCRIPT" --install-dir "$HOME/.local/bin" --skip-shell
-        rm -f "$FNM_SCRIPT"
+        local fnm_installed=0
+        if safe_curl -fsSL https://fnm.vercel.app/install -o "$FNM_SCRIPT"; then
+            bash "$FNM_SCRIPT" --install-dir "$HOME/.local/bin" --skip-shell \
+                && fnm_installed=1
+            rm -f "$FNM_SCRIPT"
+        fi
+        if [[ "$fnm_installed" -ne 1 ]]; then
+            # Fallback: pull the release binary straight from GitHub. The
+            # install script does ~exactly this; bypassing it avoids the
+            # fnm.vercel.app hop if it's flaky or blocked.
+            log_warn "fnm install script unavailable; falling back to GitHub release binary"
+            local fnm_asset
+            case "$(uname -m)" in
+                x86_64|amd64)  fnm_asset="fnm-linux.zip" ;;
+                aarch64|arm64) fnm_asset="fnm-arm64.zip" ;;
+                armv7l)        fnm_asset="fnm-arm32.zip" ;;
+                *) log_warn "No fnm release binary for $(uname -m)"; fnm_asset="" ;;
+            esac
+            if [[ -n "$fnm_asset" ]]; then
+                local FNM_ZIP="/tmp/$fnm_asset"
+                if safe_curl -fLo "$FNM_ZIP" \
+                        "https://github.com/Schniz/fnm/releases/latest/download/$fnm_asset"; then
+                    unzip -o -q "$FNM_ZIP" -d /tmp/fnm-extract
+                    install -m 0755 /tmp/fnm-extract/fnm "$HOME/.local/bin/fnm"
+                    rm -rf "$FNM_ZIP" /tmp/fnm-extract
+                else
+                    log_warn "Could not download fnm release binary"
+                fi
+            fi
+        fi
     fi
 
     local FNM_BIN
@@ -1544,11 +1630,16 @@ install_node() {
     else
         log_info "Installing bun..."
         local BUN_SCRIPT="/tmp/bun-install.sh"
-        if curl -fsSL https://bun.sh/install -o "$BUN_SCRIPT"; then
-            bash "$BUN_SCRIPT" || log_warn "Could not install bun — continuing"
+        local bun_installed=0
+        if safe_curl -fsSL https://bun.sh/install -o "$BUN_SCRIPT"; then
+            bash "$BUN_SCRIPT" && bun_installed=1
             rm -f "$BUN_SCRIPT"
-        else
-            log_warn "Could not download bun install script — continuing"
+        fi
+        if [[ "$bun_installed" -ne 1 ]]; then
+            # Fallback: install via npm (already provisioned above). Vendor-
+            # supported method per https://bun.sh/docs/installation.
+            log_warn "bun install script unavailable; falling back to npm install -g bun"
+            "$NPM_BIN" install -g bun || log_warn "Could not install bun — continuing"
         fi
     fi
 
@@ -1576,7 +1667,9 @@ setup_ssh() {
 
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
-    ssh-keygen -t ed25519 -C "$EMAIL" -f "$SSH_KEY" -N ""
+    # Prompt for a passphrase (empty input keeps the legacy behaviour). Storing
+    # an empty-passphrase key in macOS Keychain is a security no-op.
+    ssh-keygen -t ed25519 -C "$EMAIL" -f "$SSH_KEY"
     if is_macos; then
         # macOS Keychain stores the passphrase so you don't need ssh-agent manually
         ssh-add --apple-use-keychain "$SSH_KEY"
@@ -1584,7 +1677,31 @@ setup_ssh() {
         eval "$(ssh-agent -s)"
         ssh-add "$SSH_KEY"
     fi
-    ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+    # GitHub's published host keys (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+    # Verify whatever ssh-keyscan returns against these fingerprints before
+    # trusting it, so a first-run MITM can't seed a bogus known_hosts entry.
+    local expected_fps=(
+        "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+        "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM"
+        "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s"
+    )
+    local scanned
+    scanned="$(ssh-keyscan -t ed25519,rsa,ecdsa github.com 2>/dev/null || true)"
+    local scanned_fps
+    scanned_fps="$(printf '%s\n' "$scanned" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')"
+    local fp matched=0
+    if [[ -n "$scanned_fps" ]]; then
+        for fp in "${expected_fps[@]}"; do
+            if grep -qxF "$fp" <<< "$scanned_fps"; then matched=1; break; fi
+        done
+    fi
+    if [[ "$matched" == "1" ]]; then
+        printf '%s\n' "$scanned" >> "$HOME/.ssh/known_hosts"
+        log_info "Added verified github.com host keys to known_hosts"
+    else
+        log_warn "Could not verify github.com host keys against expected fingerprints — not adding to known_hosts"
+    fi
 
     echo ""
     log_info "SSH key generated. Add this public key to GitHub:"
@@ -1793,14 +1910,27 @@ setup_virtualization() {
             return
         fi
         log_info "Installing virtualization group..."
-        dnf_run_optional group install -y "virtualization" || dnf_run_optional groupinstall -y "Virtualization"
+        # dnf5 uses "group install", dnf4 uses "groupinstall". Track whether
+        # either succeeded so we don't pretend a failed install was OK.
+        if ! dnf_run_with_repair group install -y "virtualization" \
+           && ! dnf_run_with_repair groupinstall -y "Virtualization"; then
+            log_warn "Could not install Virtualization group — skipping libvirt enablement"
+            summary_fail "Virtualization (group install failed)"
+            return
+        fi
     else
         log_info "Installing virtualization packages..."
         pkg_install $(pkgs_virt)
     fi
 
-    # Service name: libvirtd (Fedora/Debian) or libvirtd.service (Arch — same)
-    sudo systemctl enable --now libvirtd || log_warn "Could not enable libvirtd"
+    # libvirtd is the legacy single unit; modern Fedora splits it into
+    # virtqemud + libvirtd.socket. Enable whichever is present.
+    if systemctl list-unit-files virtqemud.service &>/dev/null; then
+        sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket 2>/dev/null \
+            || log_warn "Could not enable virtqemud sockets"
+    else
+        sudo systemctl enable --now libvirtd || log_warn "Could not enable libvirtd"
+    fi
 
     for group in libvirt kvm; do
         if user_in_group "$group"; then
@@ -2155,13 +2285,18 @@ kde_write() {
     local value="$4"
 
     if command -v kwriteconfig6 >/dev/null 2>&1; then
-        kwriteconfig6 --file "$file" --group "$group" --key "$key" "$value" || \
+        kwriteconfig6 --file "$file" --group "$group" --key "$key" "$value" || {
             log_warn "Could not write $file [$group] $key"
+            return 1
+        }
     elif command -v kwriteconfig5 >/dev/null 2>&1; then
-        kwriteconfig5 --file "$file" --group "$group" --key "$key" "$value" || \
+        kwriteconfig5 --file "$file" --group "$group" --key "$key" "$value" || {
             log_warn "Could not write $file [$group] $key"
+            return 1
+        }
     else
         log_warn "kwriteconfig not found; cannot write $file [$group] $key"
+        return 1
     fi
 }
 
@@ -2205,6 +2340,13 @@ configure_kde() {
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session detected (running via SSH?). Skipping KDE settings."
         summary_skip "KDE config (no D-Bus session)"
+        return
+    fi
+
+    if ! command -v kwriteconfig6 >/dev/null 2>&1 \
+       && ! command -v kwriteconfig5 >/dev/null 2>&1; then
+        log_warn "Neither kwriteconfig6 nor kwriteconfig5 found — install kf6-kconfig (or kconfig5) first"
+        summary_skip "KDE config (kwriteconfig missing)"
         return
     fi
 
@@ -2362,6 +2504,7 @@ setup_dotfiles() {
         ".p10k.zsh"
         ".gitconfig"
         ".gitconfig-work"
+        ".gitconfig-imedia24"
         ".config/ghostty/config"
         ".config/fontconfig/fonts.conf"
         ".config/Code/User/settings.json"
@@ -2405,63 +2548,23 @@ setup_dotfiles() {
             continue
         fi
 
-        if [[ -e "$target" && ! -L "$target" ]]; then
+        mkdir -p "$(dirname "$target")"
+
+        if [[ -L "$target" ]]; then
+            # Legacy symlink (this repo used to ln -s into dotfiles/). Drop it
+            # silently — the copy below is the new source of truth.
+            rm -f "$target"
+        elif [[ -e "$target" ]] && ! cmp -s "$source" "$target"; then
             mkdir -p "$BACKUP_DIR/$(dirname "$file")"
             mv "$target" "$BACKUP_DIR/$file"
             log_warn "Backed up $target → $BACKUP_DIR/$file"
         fi
 
-        mkdir -p "$(dirname "$target")"
-        ln -sf "$source" "$target"
-        log_info "Symlinked ~/$file"
+        cp -p "$source" "$target"
+        log_info "Installed ~/$file"
     done
 
     summary_ok "Dotfiles"
-}
-
-# ─── Section 22b: Relink Dotfiles ────────────────────────────────────────────
-# Recovery helper for after the repo directory is renamed/moved. Walks every
-# symlink under $HOME that points into a path containing /dotfiles/ and
-# re-points it at $DOTFILES_DIR/<same-relative-path>. Safe to run anytime —
-# real files are left alone and correctly-targeted links stay no-ops.
-#
-# Run with:  bash setup.sh --only relink
-
-relink_dotfiles() {
-    log_section "Section 22b: Relink Dotfiles"
-
-    local SEARCH_DIRS=("$HOME")
-    is_macos && SEARCH_DIRS+=("$HOME/Library/Application Support")
-
-    local fixed=0 ok=0 missing=0
-    while IFS= read -r link; do
-        local current new rel
-        current="$(readlink "$link")"
-        # Extract the path component after the LAST "/dotfiles/" in the target,
-        # so we work regardless of what the parent repo dir used to be called.
-        rel="${current##*/dotfiles/}"
-        new="$DOTFILES_DIR/$rel"
-
-        if [[ "$current" == "$new" ]]; then
-            ok=$((ok + 1))
-            continue
-        fi
-        if [[ ! -e "$new" ]]; then
-            log_warn "No source for $link → expected $new"
-            missing=$((missing + 1))
-            continue
-        fi
-        ln -sfn "$new" "$link"
-        log_info "Repointed ~${link#$HOME} → $new"
-        fixed=$((fixed + 1))
-    done < <(find "${SEARCH_DIRS[@]}" -maxdepth 8 -type l -lname "*/dotfiles/*" 2>/dev/null)
-
-    log_info "Relink summary: $fixed repointed, $ok already correct, $missing missing"
-    if [[ "$missing" -gt 0 ]]; then
-        summary_fail "Relink dotfiles ($missing missing sources)"
-    else
-        summary_ok "Relink dotfiles ($fixed repointed, $ok already correct)"
-    fi
 }
 
 # ─── Section 23: Default Shell ───────────────────────────────────────────────
@@ -2565,7 +2668,6 @@ main() {
     run_section kde           configure_kde
     run_section rice          setup_rice
     run_section dotfiles      setup_dotfiles
-    run_section relink        relink_dotfiles
     run_section shell-default set_default_shell
 
     print_summary

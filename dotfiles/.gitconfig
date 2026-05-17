@@ -3,5 +3,7 @@
 	email = ezzarmou.kamal@gmail.com
 [init]
 	defaultBranch = main
-[includeIf "gitdir:~/Projects/imedia24/"]
-	path = ~/.gitconfig-work
+[includeIf "gitdir:/home/kamal/Projects/imedia24/"]
+	path = /home/kamal/.gitconfig-imedia24
+[includeIf "gitdir:/home/kamal/Projects/imedia24/**"]
+	path = /home/kamal/.gitconfig-imedia24
