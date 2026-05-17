@@ -49,7 +49,7 @@ list_sections() {
     echo "  steam-shortcuts  Fix Steam game shortcuts (add StartupWMClass for dock icons)"
     echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
     echo "  asus         asusctl/supergfxctl (auto-skips if not ASUS hardware)"
-    echo "  fonts        MesloLGS NF fonts"
+    echo "  fonts        MesloLGS NF, Inter UI font, Catppuccin cursor"
     echo "  shell        Oh My Zsh + Powerlevel10k + plugins"
     echo "  node         fnm + Node.js LTS + npm globals"
     echo "  ssh          SSH key setup"
@@ -60,7 +60,7 @@ list_sections() {
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
     echo "  gnome        GNOME-only configuration + Nautilus customizations"
     echo "  kde          KDE Plasma-only configuration"
-    echo "  rice         GNOME-only Catppuccin cursor, Inter font, Blur my Shell, Night Light"
+    echo "  rice         GNOME-only font/cursor apply, Blur my Shell, Night Light"
     echo "  dotfiles     Dotfiles symlinks"
     echo "  relink       Re-point dotfile symlinks after the repo is moved/renamed (run as --only relink)"
     echo "  shell-default  Set zsh as default shell"
@@ -526,8 +526,8 @@ install_chrome() {
 
 install_protonvpn() {
     case "$DISTRO_FAMILY" in
-        fedora) pkg_install proton-vpn-gnome-desktop ;;
-        debian) pkg_install proton-vpn-gnome-desktop ;;
+        fedora) pkg_install_one proton-vpn-gtk-app proton-vpn-gnome-desktop ;;
+        debian) pkg_install_one proton-vpn-gtk-app proton-vpn-gnome-desktop ;;
         arch)   pkg_install proton-vpn-gtk-app ;;   # AUR
         darwin) pkg_install protonvpn ;;            # Homebrew cask
     esac
@@ -1328,10 +1328,67 @@ install_asus_tools() {
     summary_ok "ASUS tools"
 }
 
-# ─── Section 12: Fonts ───────────────────────────────────────────────────────
+# ─── Section 12: Fonts / Shared Desktop Assets ───────────────────────────────
+
+install_inter_font() {
+    if fc-match Inter 2>/dev/null | grep -qi "^inter"; then
+        log_warn "Inter font already installed"
+        return 0
+    fi
+
+    log_info "Installing Inter font..."
+    local INTER_ZIP="/tmp/inter.zip"
+    local INTER_URL
+    INTER_URL=$(curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
+        | grep -o '"browser_download_url": *"[^"]*Inter-[^"]*\.zip"' \
+        | grep -o 'https://[^"]*' | head -1 || true)
+    if [[ -z "$INTER_URL" ]]; then
+        log_warn "Could not resolve Inter font URL, skipping"
+        return 0
+    fi
+
+    if curl -fLo "$INTER_ZIP" "$INTER_URL"; then
+        mkdir -p "$HOME/.local/share/fonts/Inter"
+        unzip -j -q "$INTER_ZIP" "*/extras/otf/*.otf" \
+            -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
+            unzip -q "$INTER_ZIP" -d "$HOME/.local/share/fonts/Inter"
+        fc-cache -f "$HOME/.local/share/fonts"
+        log_info "Inter font installed."
+    else
+        log_warn "Could not download Inter font, skipping"
+    fi
+    rm -f "$INTER_ZIP"
+}
+
+install_catppuccin_cursor() {
+    if ls "$HOME/.local/share/icons/" 2>/dev/null | grep -qi "catppuccin.*mocha.*cursor"; then
+        log_warn "Catppuccin cursor already installed"
+        return 0
+    fi
+
+    log_info "Installing Catppuccin cursor..."
+    local CURSOR_ZIP="/tmp/catppuccin-cursors.zip"
+    local CURSOR_URL
+    CURSOR_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/cursors/releases/latest \
+        | grep -oi '"browser_download_url": *"[^"]*mocha[^"]*dark[^"]*\.zip"' \
+        | grep -o 'https://[^"]*' | head -1 || true)
+    if [[ -z "$CURSOR_URL" ]]; then
+        log_warn "Could not resolve Catppuccin cursor URL, skipping"
+        return 0
+    fi
+
+    if curl -fLo "$CURSOR_ZIP" "$CURSOR_URL"; then
+        mkdir -p "$HOME/.local/share/icons"
+        unzip -q "$CURSOR_ZIP" -d "$HOME/.local/share/icons/"
+        log_info "Catppuccin cursor installed."
+    else
+        log_warn "Could not download Catppuccin cursor, skipping"
+    fi
+    rm -f "$CURSOR_ZIP"
+}
 
 install_fonts() {
-    log_section "Section 12: Fonts (MesloLGS NF)"
+    log_section "Section 12: Fonts / Shared Desktop Assets"
 
     if is_macos; then
         log_warn "Font management is handled manually on macOS — install fonts via Font Book."
@@ -1342,28 +1399,29 @@ install_fonts() {
     local FONT_DIR="$HOME/.local/share/fonts"
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
 
+    mkdir -p "$FONT_DIR"
     if [[ -f "$FONT_CHECK" ]]; then
-        log_warn "MesloLGS NF already installed, skipping"
-        summary_skip "MesloLGS NF fonts (already installed)"
-        return
+        log_warn "MesloLGS NF already installed"
+    else
+        local BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
+        local FONTS=(
+            "MesloLGS NF Regular.ttf"
+            "MesloLGS NF Bold.ttf"
+            "MesloLGS NF Italic.ttf"
+            "MesloLGS NF Bold Italic.ttf"
+        )
+
+        for font in "${FONTS[@]}"; do
+            log_info "Downloading $font..."
+            curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
+        done
+
+        fc-cache -fv "$FONT_DIR"
     fi
 
-    mkdir -p "$FONT_DIR"
-    local BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
-    local FONTS=(
-        "MesloLGS NF Regular.ttf"
-        "MesloLGS NF Bold.ttf"
-        "MesloLGS NF Italic.ttf"
-        "MesloLGS NF Bold Italic.ttf"
-    )
-
-    for font in "${FONTS[@]}"; do
-        log_info "Downloading $font..."
-        curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
-    done
-
-    fc-cache -fv "$FONT_DIR"
-    summary_ok "MesloLGS NF fonts"
+    install_inter_font
+    install_catppuccin_cursor
+    summary_ok "Fonts / shared desktop assets"
 }
 
 # ─── Section 12: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
@@ -2107,6 +2165,40 @@ kde_write() {
     fi
 }
 
+kde_apply_runtime_settings() {
+    local color_scheme="$1"
+    local cursor_theme="$2"
+
+    if command -v plasma-apply-colorscheme >/dev/null 2>&1; then
+        plasma-apply-colorscheme "$color_scheme" >/dev/null 2>&1 || \
+            log_warn "Could not apply KDE color scheme live"
+    fi
+
+    if [[ -n "$cursor_theme" ]] && command -v plasma-apply-cursortheme >/dev/null 2>&1; then
+        plasma-apply-cursortheme "$cursor_theme" >/dev/null 2>&1 || \
+            log_warn "Could not apply KDE cursor theme live"
+    fi
+
+    if command -v qdbus6 >/dev/null 2>&1; then
+        qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus org.kde.KWin /KWin reconfigure 2>/dev/null || true
+    fi
+
+    log_warn "Some KDE settings apply only after logout/login; not restarting plasmashell automatically."
+}
+
+clear_no_color_environment() {
+    unset NO_COLOR
+
+    if systemctl --user show-environment 2>/dev/null | grep -q '^NO_COLOR='; then
+        systemctl --user unset-environment NO_COLOR 2>/dev/null || true
+        log_info "Removed NO_COLOR from the user systemd environment."
+    fi
+
+    dbus-update-activation-environment --systemd NO_COLOR 2>/dev/null || true
+}
+
 configure_kde() {
     log_section "Section 20b: KDE Plasma Configuration"
 
@@ -2116,11 +2208,21 @@ configure_kde() {
         return
     fi
 
+    clear_no_color_environment
+
+    local terminal_app="konsole"
+    if command -v ghostty >/dev/null 2>&1; then
+        terminal_app="ghostty"
+    elif ! command -v konsole >/dev/null 2>&1; then
+        log_warn "Neither ghostty nor konsole found; leaving KDE terminal setting unchanged"
+        terminal_app=""
+    fi
+
     # Interface
     kde_write kdeglobals General ColorScheme BreezeDark
     kde_write kdeglobals Icons Theme Papirus-Dark
     kde_write kdeglobals KDE SingleClick false
-    kde_write kdeglobals General TerminalApplication ghostty
+    [[ -n "$terminal_app" ]] && kde_write kdeglobals General TerminalApplication "$terminal_app"
 
     local cursor_theme
     cursor_theme=$(ls "$HOME/.local/share/icons/" 2>/dev/null | grep -i "catppuccin.*mocha.*cursor" | head -1 || true)
@@ -2132,13 +2234,19 @@ configure_kde() {
     fi
 
     # Fonts
-    local ui_font="Inter,12,-1,5,50,0,0,0,0,0"
-    local ui_font_bold="Inter,12,-1,5,75,0,0,0,0,0"
+    local ui_family="Noto Sans"
+    if fc-match Inter 2>/dev/null | grep -qi "^inter"; then
+        ui_family="Inter"
+    else
+        log_warn "Inter font not found; using $ui_family for KDE UI fonts"
+    fi
+    local ui_font="${ui_family},12,-1,5,50,0,0,0,0,0"
+    local ui_font_bold="${ui_family},12,-1,5,75,0,0,0,0,0"
     local mono_font="MesloLGS NF,12,-1,5,50,0,0,0,0,0"
     kde_write kdeglobals General font "$ui_font"
     kde_write kdeglobals General menuFont "$ui_font"
     kde_write kdeglobals General toolBarFont "$ui_font"
-    kde_write kdeglobals General smallestReadableFont "Inter,10,-1,5,50,0,0,0,0,0"
+    kde_write kdeglobals General smallestReadableFont "${ui_family},10,-1,5,50,0,0,0,0,0"
     kde_write kdeglobals General fixed "$mono_font"
     kde_write kdeglobals WM activeFont "$ui_font_bold"
 
@@ -2183,13 +2291,14 @@ configure_kde() {
             ;;
     esac
     sudo timedatectl set-timezone Africa/Casablanca
-    powerprofilesctl set power-saver 2>/dev/null || \
-        log_warn "Could not set power profile"
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set power-saver 2>/dev/null || \
+            log_warn "Could not set power profile"
+    else
+        log_warn "powerprofilesctl not found; skipping power profile"
+    fi
 
-    # Reload what can be refreshed live; the rest applies on next login.
-    qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true
-    kquitapp6 plasmashell 2>/dev/null || true
-    kstart6 plasmashell >/dev/null 2>&1 || true
+    kde_apply_runtime_settings BreezeDark "$cursor_theme"
 
     summary_ok "KDE Plasma configuration"
 }
@@ -2205,53 +2314,12 @@ setup_rice() {
         return
     fi
 
-    # Inter UI font
-    if fc-match Inter 2>/dev/null | grep -qi "^inter"; then
-        log_warn "Inter font already installed"
-    else
-        log_info "Installing Inter font..."
-        local INTER_ZIP="/tmp/inter.zip"
-        local INTER_URL
-        INTER_URL=$(curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*Inter-[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1 || true)
-        if [[ -z "$INTER_URL" ]]; then
-            log_warn "Could not resolve Inter font URL, skipping"
-        else
-            curl -fLo "$INTER_ZIP" "$INTER_URL"
-            mkdir -p "$HOME/.local/share/fonts/Inter"
-            unzip -j -q "$INTER_ZIP" "*/extras/otf/*.otf" \
-                -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
-                unzip -q "$INTER_ZIP" -d "$HOME/.local/share/fonts/Inter"
-            fc-cache -f "$HOME/.local/share/fonts"
-            rm -f "$INTER_ZIP"
-            log_info "Inter font installed."
-        fi
-    fi
+    install_inter_font
 
     # GTK theme: use GNOME default (Adwaita). Reset in case a prior run set Catppuccin.
     gsettings reset org.gnome.desktop.interface gtk-theme 2>/dev/null || true
 
-    # Catppuccin cursor
-    if ls "$HOME/.local/share/icons/" 2>/dev/null | grep -qi "catppuccin.*mocha.*cursor"; then
-        log_warn "Catppuccin cursor already installed"
-    else
-        log_info "Installing Catppuccin cursor..."
-        local CURSOR_ZIP="/tmp/catppuccin-cursors.zip"
-        local CURSOR_URL
-        CURSOR_URL=$(curl -fsSL https://api.github.com/repos/catppuccin/cursors/releases/latest \
-            | grep -oi '"browser_download_url": *"[^"]*mocha[^"]*dark[^"]*\.zip"' \
-            | grep -o 'https://[^"]*' | head -1 || true)
-        if [[ -z "$CURSOR_URL" ]]; then
-            log_warn "Could not resolve Catppuccin cursor URL, skipping"
-        else
-            curl -fLo "$CURSOR_ZIP" "$CURSOR_URL"
-            mkdir -p "$HOME/.local/share/icons"
-            unzip -q "$CURSOR_ZIP" -d "$HOME/.local/share/icons/"
-            rm -f "$CURSOR_ZIP"
-            log_info "Catppuccin cursor installed."
-        fi
-    fi
+    install_catppuccin_cursor
 
     # Apply cursor theme
     local CURSOR_THEME

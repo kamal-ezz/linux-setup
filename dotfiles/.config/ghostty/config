@@ -13,22 +13,23 @@ selection-foreground = #e0def4
 
 palette = 0=#26233a
 palette = 1=#eb6f92
-palette = 2=#31748f
+palette = 2=#3e8fb0
 palette = 3=#f6c177
 palette = 4=#9ccfd8
 palette = 5=#c4a7e7
 palette = 6=#ebbcba
 palette = 7=#e0def4
 palette = 8=#6e6a86
-palette = 9=#eb6f92
-palette = 10=#31748f
-palette = 11=#f6c177
-palette = 12=#9ccfd8
-palette = 13=#c4a7e7
-palette = 14=#ebbcba
-palette = 15=#e0def4
+palette = 9=#f083a2
+palette = 10=#9ccfd8
+palette = 11=#f8d49a
+palette = 12=#b4e3ea
+palette = 13=#d7bdf4
+palette = 14=#f0d0ce
+palette = 15=#f5f3ff
 
 background-opacity = 0.95
 
-gtk-titlebar = true
+gtk-titlebar = false
 gtk-single-instance = false
+window-show-tab-bar = auto

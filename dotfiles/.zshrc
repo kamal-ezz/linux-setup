@@ -1,6 +1,11 @@
 # fnm must be initialized before the instant prompt to avoid console output warnings.
 eval "$(fnm env --use-on-cd --shell zsh 2>/dev/null)" 2>/dev/null || true
 
+# Keep terminal applications colorful even if the parent desktop/session exports
+# the no-color convention.
+unset NO_COLOR
+export CLICOLOR=1
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.

@@ -4,5 +4,14 @@
   "defaultModel": "gpt-5.5",
   "defaultThinkingLevel": "medium",
   "hideThinkingBlock": true,
-  "packages": []
+  "enableSkillCommands": true,
+  "terminal.showImages": true,
+  "terminal.imageWidthCells": 80,
+  "images.autoResize": true,
+  "images.blockImages": false,
+  "packages": [
+    "npm:pi-mcp-adapter",
+    "npm:@porche/pi-usage",
+    "npm:pi-markdown-preview"
+  ]
 }

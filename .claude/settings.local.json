@@ -58,7 +58,15 @@
       "Bash(pkg_install gnome-shell-extension-user-theme *)",
       "Bash(curl -s https://api.github.com/repos/catppuccin/gnome-shell/releases/latest)",
       "Bash(curl -s \"https://api.github.com/repos/catppuccin/gnome-shell/releases\")",
-      "Bash(curl -s \"https://api.github.com/repos/catppuccin/gtk/releases/latest\")"
+      "Bash(curl -s \"https://api.github.com/repos/catppuccin/gtk/releases/latest\")",
+      "Read(//home/kamal/.config/fontconfig/**)",
+      "Read(//etc/fonts/conf.d/**)",
+      "Bash(fc-match -s \"Roboto\" :lang=ar)",
+      "Bash(fc-match \"sans-serif\" :lang=ar)",
+      "Bash(fc-match \"sans-serif:lang=ar\")",
+      "Bash(fc-match \"Roboto:lang=ar\")",
+      "Bash(fc-match \"Inter:lang=ar\")",
+      "Bash(fc-match \"Roboto\")"
     ]
   }
 }
